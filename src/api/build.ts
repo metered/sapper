@@ -16,7 +16,8 @@ type Opts = {
 	routes?: string;
 	dest?: string;
 	output?: string;
-	static?: string;
+	static_files?: string;
+	bundler_config?: string;
 	legacy?: boolean;
 	bundler?: 'rollup' | 'webpack';
 	ext?: string;
@@ -28,9 +29,9 @@ export async function build({
 	src = 'src',
 	routes = 'src/routes',
 	output = 'src/node_modules/@sapper',
-	static: static_files = 'static',
+	static_files = 'static',
 	dest = '__sapper__/build',
-
+	bundler_config,
 	bundler,
 	legacy = false,
 	ext,
@@ -75,7 +76,7 @@ export async function build({
 		dev: false
 	});
 
-	const { client, server, serviceworker } = await create_compilers(bundler, cwd, src, dest, false);
+	const { client, server, serviceworker } = await create_compilers(bundler, cwd, src, dest, bundler_config, false);
 
 	const client_result = await client.compile();
 	oncompile({
@@ -87,7 +88,7 @@ export async function build({
 
 	if (legacy) {
 		process.env.SAPPER_LEGACY_BUILD = 'true';
-		const { client } = await create_compilers(bundler, cwd, src, dest, false);
+		const { client } = await create_compilers(bundler, cwd, src, dest, bundler_config, false);
 
 		const client_result = await client.compile();
 

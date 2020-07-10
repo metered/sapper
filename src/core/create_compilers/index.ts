@@ -9,6 +9,7 @@ export default async function create_compilers(
 	cwd: string,
 	src: string,
 	dest: string,
+	bundler_config: string | undefined,
 	dev: boolean
 ): Promise<Compilers> {
 	set_dev(dev);
@@ -16,7 +17,7 @@ export default async function create_compilers(
 	set_dest(dest);
 
 	if (bundler === 'rollup') {
-		const config = await RollupCompiler.load_config(cwd);
+		const config = await RollupCompiler.load_config(cwd, bundler_config);
 		validate_config(config, 'rollup');
 
 		normalize_rollup_config(config.client);
@@ -34,7 +35,8 @@ export default async function create_compilers(
 	}
 
 	if (bundler === 'webpack') {
-		const config = require(path.resolve(cwd, 'webpack.config.js'));
+		const webpackConfig = bundler_config || 'webpack.config.js';
+		const config = require(path.resolve(cwd, webpackConfig));
 		validate_config(config, 'webpack');
 
 		return {

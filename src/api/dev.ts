@@ -22,6 +22,7 @@ type Opts = {
 	routes?: string,
 	output?: string,
 	static?: string,
+	bundler_config?: string,
 	'dev-port'?: number,
 	live?: boolean,
 	hot?: boolean,
@@ -44,6 +45,7 @@ class Watcher extends EventEmitter {
 		routes: string;
 		output: string;
 		static: string;
+		bundler_config: string;
 	}
 	port: number;
 	closed: boolean;
@@ -76,6 +78,7 @@ class Watcher extends EventEmitter {
 		output = 'src/node_modules/@sapper',
 		static: static_files = 'static',
 		dest = '__sapper__/dev',
+		bundler_config,
 		'dev-port': dev_port,
 		live,
 		hot,
@@ -87,11 +90,13 @@ class Watcher extends EventEmitter {
 		super();
 
 		cwd = path.resolve(cwd);
+		src = path.resolve(cwd, src);
 
 		this.bundler = validate_bundler(bundler);
 		this.dirs = {
 			cwd,
-			src: path.resolve(cwd, src),
+			src,
+			bundler_config,
 			dest: path.resolve(cwd, dest),
 			routes: path.resolve(cwd, routes),
 			output: path.resolve(cwd, output),
@@ -222,7 +227,7 @@ class Watcher extends EventEmitter {
 		let deferred = new Deferred();
 
 		// TODO watch the configs themselves?
-		const compilers: Compilers = await create_compilers(this.bundler, cwd, src, dest, true);
+		const compilers: Compilers = await create_compilers(this.bundler, cwd, src, dest, this.dirs.bundler_config, true);
 
 		const emitFatal = () => {
 			this.emit('fatal', <FatalEvent>{
