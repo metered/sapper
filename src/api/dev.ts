@@ -5,8 +5,7 @@ import * as child_process from 'child_process';
 import * as ports from 'port-authority';
 import { EventEmitter } from 'events';
 import { create_manifest_data, create_app, create_compilers, create_serviceworker_manifest } from '../core';
-import { Compiler, Compilers } from '../core/create_compilers';
-import { CompileResult } from '../core/create_compilers/interfaces';
+import { Compilers, Compiler, CompileResult } from '../core/create_compilers/interfaces';
 import Deferred from './utils/Deferred';
 import validate_bundler from './utils/validate_bundler';
 import { copy_shimport } from './utils/copy_shimport';
@@ -170,7 +169,7 @@ class Watcher extends EventEmitter {
 				manifest_data,
 				dev: true,
 				dev_port: this.dev_port,
-				cwd, src, dest, routes, output
+				cwd, src, routes, output
 			});
 		} catch (err) {
 			this.emit('fatal', <FatalEvent>{
@@ -198,7 +197,7 @@ class Watcher extends EventEmitter {
 							manifest_data,
 							dev: true,
 							dev_port: this.dev_port,
-							cwd, src, dest, routes, output
+							cwd, src, routes, output
 						});
 					} catch (error) {
 						this.emit('error', <ErrorEvent>{

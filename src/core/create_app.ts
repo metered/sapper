@@ -10,7 +10,6 @@ export function create_app({
 	dev,
 	cwd,
 	src,
-	dest,
 	routes,
 	output
 }: {
@@ -20,7 +19,6 @@ export function create_app({
 	dev: boolean;
 	cwd: string;
 	src: string;
-	dest: string;
 	routes: string;
 	output: string
 }) {

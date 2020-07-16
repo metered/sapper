@@ -1,10 +1,11 @@
+import { Stats } from 'webpack';
 import relative from 'require-relative';
-import { CompileResult } from './interfaces';
+import { Compiler, CompileResult } from './interfaces';
 import WebpackResult from './WebpackResult';
 
 let webpack: any;
 
-export class WebpackCompiler {
+export class WebpackCompiler implements Compiler<WebpackResult> {
 	_: any;
 
 	constructor(config: any) {
@@ -16,7 +17,7 @@ export class WebpackCompiler {
 		this._.hooks.invalid.tap('sapper', cb);
 	}
 
-	compile(): Promise<CompileResult> {
+	compile(): Promise<WebpackResult> {
 		return new Promise((fulfil, reject) => {
 			this._.run((err: Error, stats: any) => {
 				if (err) {
@@ -38,8 +39,8 @@ export class WebpackCompiler {
 		});
 	}
 
-	watch(cb: (err?: Error, stats?: any) => void) {
-		this._.watch({}, (err?: Error, stats?: any) => {
+	watch(cb: (err?: Error, stats?: WebpackResult) => void) {
+		this._.watch({}, (err?: Error, stats?: Stats) => {
 			cb(err, stats && new WebpackResult(stats));
 		});
 	}
