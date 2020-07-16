@@ -1,6 +1,7 @@
+import { Stats } from 'webpack'
 import format_messages from 'webpack-format-messages';
 import { CompileResult, BuildInfo, CompileError, Chunk, CssFile } from './interfaces';
-import { ManifestData, Dirs, PageComponent } from '../../interfaces';
+import { ManifestData, Dirs, PageComponent, UserPageComponent } from '../../interfaces';
 
 const locPattern = /\((\d+):(\d+)\)$/;
 
@@ -8,7 +9,7 @@ function munge_warning_or_error(message: string) {
 	// TODO this is all a bit rube goldberg...
 	const lines = message.split('\n');
 
-	const file = lines.shift()
+	const file = (lines.shift() || "")
 		.replace('[7m', '') // careful — there is a special character at the beginning of this string
 		.replace('[27m', '')
 		.replace('./', '');
@@ -30,15 +31,14 @@ function munge_warning_or_error(message: string) {
 }
 
 export default class WebpackResult implements CompileResult {
-	duration: number;
+	duration?: number;
 	errors: CompileError[];
 	warnings: CompileError[];
 	chunks: Chunk[];
-	assets: Record<string, string>;
-	css_files: CssFile[];
-	stats: any;
+	assets: Record<string, string | string[]>;
+	stats: Stats;
 
-	constructor(stats: any) {
+	constructor(stats: Stats) {
 		this.stats = stats;
 
 		const info = stats.toJson();
@@ -50,14 +50,25 @@ export default class WebpackResult implements CompileResult {
 
 		this.duration = info.time;
 
-		this.chunks = info.assets.map((chunk: { name: string }) => ({ file: chunk.name }));
+		if (!info.assets) {
+			throw new Error("Internal error: Webpack stats does not have assets field")
+		}
+
+		if (!info.assetsByChunkName) {
+			throw new Error("Internal error: Webpack stats does not have assetsByChunkName field")
+		}
+
+		// TODO(ajbouh) imports and modules should probably *not* be empty, but it's
+		// unclear what their contracts are and I don't know how to populate them properly.
+		this.chunks = info.assets.map((chunk: { name: string }) => ({ file: chunk.name, imports: [], modules: [] }));
 		this.assets = info.assetsByChunkName;
 	}
 
 	to_json(manifest_data: ManifestData, dirs: Dirs): BuildInfo {
 		const extract_css = (assets: string[] | string) => {
 			assets = Array.isArray(assets) ? assets : [assets];
-			return assets.find(asset => /\.css$/.test(asset));
+			const css = assets.find(asset => /\.css$/.test(asset))
+			return css === undefined ? null : css
 		};
 
 		return {
@@ -67,7 +78,7 @@ export default class WebpackResult implements CompileResult {
 			css: {
 				main: extract_css(this.assets.main),
 				chunks: manifest_data.components
-					.reduce((chunks: Record<string, string[]>, component: PageComponent) => {
+					.reduce((chunks: Record<string, string[]>, component: UserPageComponent) => {
 						const css_dependencies = [];
 						const css = extract_css(this.assets[component.name]);
 

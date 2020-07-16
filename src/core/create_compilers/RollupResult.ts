@@ -14,10 +14,6 @@ export default class RollupResult implements CompileResult {
 	chunks: Chunk[];
 	assets: Record<string, string>;
 	css_files: CssFile[];
-	css: {
-		main: string,
-		chunks: Record<string, string[]>
-	};
 	sourcemap: boolean | 'inline';
 	summary: string;
 
@@ -46,6 +42,12 @@ export default class RollupResult implements CompileResult {
 					this.assets.main = chunk.fileName;
 				}
 			});
+		} else if (Array.isArray(compiler.input)) {
+			for (const name in compiler.input) {
+				const file = compiler.input[name];
+				const chunk = compiler.chunks.find(chunk => file in chunk.modules);
+				if (chunk) this.assets[name] = chunk.fileName;
+			}
 		} else {
 			for (const name in compiler.input) {
 				const file = compiler.input[name];
@@ -55,8 +57,9 @@ export default class RollupResult implements CompileResult {
 		}
 
 		this.summary = compiler.chunks.map(chunk => {
-			const size_color = chunk.code.length > 150000 ? colors.bold().red : chunk.code.length > 50000 ? colors.bold().yellow : colors.bold().white;
-			const size_label = left_pad(pb(chunk.code.length), 10);
+			const code = chunk.code || ""
+			const size_color = code.length > 150000 ? colors.bold().red : code.length > 50000 ? colors.bold().yellow : colors.bold().white;
+			const size_label = left_pad(pb(code.length), 10);
 
 			const lines = [size_color(`${size_label} ${chunk.fileName}`)];
 

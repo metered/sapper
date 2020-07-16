@@ -1,27 +1,28 @@
 import * as path from 'path';
 import color from 'kleur';
 import relative from 'require-relative';
-import { RollupError } from 'rollup/types';
-import { CompileResult } from './interfaces';
+import { RollupError, RenderedChunk, WarningHandler, RollupWarning, InputOptions, rollup as _rollup, watch as _watch, InputOption } from 'rollup';
+import { Compiler, CompileResult } from './interfaces';
 import RollupResult from './RollupResult';
 
 const stderr = console.error.bind(console);
 
-let rollup: any;
+let rollup: {rollup: typeof _rollup, watch: typeof _watch};
 
-export default class RollupCompiler {
+export default class RollupCompiler implements Compiler<RollupResult> {
 	_: Promise<any>;
-	_oninvalid: (filename: string) => void;
+	_oninvalid?: (filename: string) => void;
 	_start: number;
-	input: string;
-	warnings: any[];
+	input: InputOption;
+	warnings: RollupWarning[];
 	errors: any[];
-	chunks: any[];
+	chunks: RenderedChunk[];
 	css_files: Array<{ id: string, code: string }>;
 
 	constructor(config: any) {
 		this._ = this.get_config(config);
-		this.input = null;
+		this._start = Date.now()
+		this.input = "";
 		this.warnings = [];
 		this.errors = [];
 		this.chunks = [];
@@ -32,10 +33,14 @@ export default class RollupCompiler {
 		// TODO this is hacky, and doesn't need to apply to all three compilers
 		(mod.plugins || (mod.plugins = [])).push({
 			name: 'sapper-internal',
-			options: (opts: any) => {
+			options: (opts: InputOptions) => {
+				if (opts.input === undefined) {
+					throw new Error("Internal error: input from rollup is undefined")
+				}
 				this.input = opts.input;
 			},
-			renderChunk: (code: string, chunk: any) => {
+			renderChunk: (code: string, chunk: RenderedChunk) => {
+				console.log("renderChunk", {chunk})
 				this.chunks.push(chunk);
 			},
 			transform: (code: string, id: string) => {
@@ -46,12 +51,12 @@ export default class RollupCompiler {
 			}
 		});
 
-		const onwarn = mod.onwarn || ((warning: any, handler: (warning: any) => void) => {
+		const onwarn = mod.onwarn || ((warning: RollupWarning, handler: WarningHandler) => {
 			handler(warning);
 		});
 
 		mod.onwarn = (warning: any) => {
-			onwarn(warning, (warning: any) => {
+			onwarn(warning, (warning: RollupWarning) => {
 				this.warnings.push(warning);
 			});
 		};
@@ -63,7 +68,7 @@ export default class RollupCompiler {
 		this._oninvalid = cb;
 	}
 
-	async compile(): Promise<CompileResult> {
+	async compile(): Promise<RollupResult> {
 		const config = await this._;
 		const sourcemap = config.output.sourcemap;
 
@@ -79,10 +84,13 @@ export default class RollupCompiler {
 			stderr(new RollupResult(Date.now() - start, this, sourcemap).print());
 
 			handleError(err);
+
+			// should never get here.
+			throw err
 		}
 	}
 
-	async watch(cb: (err?: Error, stats?: any) => void) {
+	async watch(cb: (err?: Error, stats?: RollupResult) => void) {
 		const config = await this._;
 		const sourcemap = config.output.sourcemap;
 
@@ -92,7 +100,7 @@ export default class RollupCompiler {
 			this.chunks = [];
 			this.warnings = [];
 			this.errors = [];
-			this._oninvalid(id);
+			this._oninvalid && this._oninvalid(id);
 		});
 
 		watcher.on('event', (event: any) => {
@@ -113,7 +121,7 @@ export default class RollupCompiler {
 
 				case 'ERROR':
 					this.errors.push(event.error);
-					cb(null, new RollupResult(Date.now() - this._start, this, sourcemap));
+					cb(undefined, new RollupResult(Date.now() - this._start, this, sourcemap));
 					break;
 
 				case 'START':
@@ -126,7 +134,7 @@ export default class RollupCompiler {
 					break;
 
 				case 'BUNDLE_END':
-					cb(null, new RollupResult(Date.now() - this._start, this, sourcemap));
+					cb(undefined, new RollupResult(Date.now() - this._start, this, sourcemap));
 					break;
 
 				default:
@@ -149,7 +157,7 @@ export default class RollupCompiler {
 		});
 
 		const resp = await bundle.generate({ format: 'cjs' });
-		const { code } = resp.output ? resp.output[0] : resp;
+		const { code } = resp.output ? resp.output[0] : (resp as any);
 
 		// temporarily override require
 		const defaultLoader = require.extensions['.js'];

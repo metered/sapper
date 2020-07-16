@@ -2,14 +2,7 @@ import * as path from 'path';
 import RollupCompiler from './RollupCompiler';
 import { WebpackCompiler } from './WebpackCompiler';
 import { set_dev, set_src, set_dest } from '../../config/env';
-
-export type Compiler = RollupCompiler | WebpackCompiler;
-
-export type Compilers = {
-	client: Compiler;
-	server: Compiler;
-	serviceworker?: Compiler;
-}
+import { Compilers } from './interfaces';
 
 export default async function create_compilers(
 	bundler: 'rollup' | 'webpack',

@@ -2,14 +2,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import hash from 'string-hash';
 import * as codec from 'sourcemap-codec';
-import { PageComponent, Dirs } from '../../interfaces';
+import { PageComponent, Dirs, UserPageComponent } from '../../interfaces';
 import { CompileResult, Chunk } from './interfaces';
-import { posixify } from '../../utils'
 
 const inline_sourcemap_header = 'data:application/json;charset=utf-8;base64,';
 
 function extract_sourcemap(raw: string, id: string) {
-	let raw_map: string;
+	let raw_map = <string | undefined> undefined;
 	let map = null;
 
 	const code = raw.replace(/\/\*#\s+sourceMappingURL=(.+)\s+\*\//g, (m, url) => {
@@ -22,7 +21,7 @@ function extract_sourcemap(raw: string, id: string) {
 		return '';
 	}).trim();
 
-	if (raw_map) {
+	if (typeof raw_map === 'string') {
 		if (raw_map.startsWith(inline_sourcemap_header)) {
 			const json = Buffer.from(raw_map.slice(inline_sourcemap_header.length), 'base64').toString();
 			map = JSON.parse(json);
@@ -39,30 +38,28 @@ function extract_sourcemap(raw: string, id: string) {
 
 type SourceMap = {
 	version: 3;
-	file: string;
+	file: string | null;
 	sources: string[];
 	sourcesContent: string[];
 	names: string[];
 	mappings: string;
 };
 
-function get_css_from_modules(modules: string[], css_map: Map<string, string>, asset_dir: string) {
+function get_css_from_modules(modules: string[], css_map: Map<string, string>, asset_dir: string): { code: string, map: SourceMap } {
 	const parts: string[] = [];
-	const mappings: number[][][] = [];
+	const mappings: codec.SourceMapMappings = [];
 
-	const combined_map: SourceMap = {
-		version: 3,
-		file: null,
-		sources: [],
-		sourcesContent: [],
-		names: [],
-		mappings: null
-	};
+	const sources = <string[]>[]
+	const sourcesContent = <string[]>[]
+	const names = <string[]>[]
 
 	modules.forEach(module => {
 		if (!/\.css$/.test(module)) return;
 
 		const css = css_map.get(module);
+		if (css === undefined) {
+			throw new Error(`Internal Error: nothing in css_map for ${module}. Have: ${Array.from(css_map.keys())}`)
+		}
 
 		const { code, map } = extract_sourcemap(css, module);
 
@@ -71,43 +68,46 @@ function get_css_from_modules(modules: string[], css_map: Map<string, string>, a
 		if (map) {
 			const lines = codec.decode(map.mappings);
 
-			if (combined_map.sources.length > 0 || combined_map.names.length > 0) {
+			if (sources.length > 0 || names.length > 0) {
 				lines.forEach(line => {
 					line.forEach(segment => {
 						// adjust source index
-						segment[1] += combined_map.sources.length;
+						if (segment[1] !== undefined) segment[1] += sources.length;
 
 						// adjust name index
-						if (segment[4]) segment[4] += combined_map.names.length;
+						if (segment[4]) segment[4] += names.length;
 					});
 				});
 			}
 
-			combined_map.sources.push(...map.sources);
-			combined_map.sourcesContent.push(...map.sourcesContent);
-			combined_map.names.push(...map.names);
+			sources.push(...map.sources);
+			sourcesContent.push(...map.sourcesContent);
+			names.push(...map.names);
 
 			mappings.push(...lines);
 		}
 	});
 
 	if (parts.length > 0) {
-		combined_map.mappings = codec.encode(mappings);
-
-		combined_map.sources = combined_map.sources.map(source => path.relative(asset_dir, source).replace(/\\/g, '/'));
-
 		return {
 			code: parts.join('\n'),
-			map: combined_map
+			map: {
+				version: 3,
+				file: null,
+				sources: sources.map(source => path.relative(asset_dir, source).replace(/\\/g, '/')),
+				sourcesContent,
+				names,
+				mappings: codec.encode(mappings)
+			},
 		};
 	}
 
-	return null;
+	throw new Error(`Internal error: no css in modules passed to get_css_from_modules: Got ${modules}`)
 }
 
 export default function extract_css(
 	client_result: CompileResult,
-	components: PageComponent[],
+	components: UserPageComponent[],
 	dirs: Dirs,
 	sourcemap: boolean | 'inline'
 ) {
@@ -126,17 +126,17 @@ export default function extract_css(
 
 	const unclaimed = new Set(client_result.css_files.map(x => x.id));
 
-	const lookup = new Map();
+	const lookup = new Map<string, Chunk>();
 	client_result.chunks.forEach(chunk => {
 		lookup.set(chunk.file, chunk);
 	});
 
-	const css_map = new Map();
+	const css_map = new Map<string, string>();
 	client_result.css_files.forEach(css_module => {
 		css_map.set(css_module.id, css_module.code);
 	});
 
-	const chunks_with_css = new Set();
+	const chunks_with_css = new Set<Chunk>();
 
 	// concatenate and emit CSS
 	client_result.chunks.forEach(chunk => {
@@ -169,15 +169,18 @@ export default function extract_css(
 	const entry = path.resolve(dirs.src, 'client.js');
 	const entry_chunk = client_result.chunks.find(chunk => chunk.modules.indexOf(entry) !== -1);
 
-	const entry_chunk_dependencies: Set<Chunk> = new Set([entry_chunk]);
+	const entry_chunk_dependencies: Set<Chunk> = new Set(entry_chunk ? [entry_chunk]: []);
 	const entry_css_modules: string[] = [];
 
 	// recursively find the chunks this component depends on
 	entry_chunk_dependencies.forEach(chunk => {
-		if (!chunk) return; // TODO why does this happen?
-
 		chunk.imports.forEach(file => {
-			entry_chunk_dependencies.add(lookup.get(file));
+			const dep = lookup.get(file)
+			if (!dep) {
+				console.warn(`Could not find entry chunk dependency for ${file}. Have dependencies for: ${Array.from(lookup.keys())}`)
+				return
+			}
+			entry_chunk_dependencies.add(dep);
 		});
 
 		if (chunks_with_css.has(chunk)) {
@@ -193,7 +196,7 @@ export default function extract_css(
 	// figure out which (css-having) chunks each component depends on
 	components.forEach(component => {
 		const resolved = path.resolve(dirs.routes, component.file);
-		const chunk: Chunk = client_result.chunks.find(chunk => chunk.modules.indexOf(resolved) !== -1);
+		const chunk = client_result.chunks.find(chunk => chunk.modules.indexOf(resolved) !== -1);
 
 		if (!chunk) {
 			// this should never happen!
@@ -209,7 +212,13 @@ export default function extract_css(
 			if (!chunk) return; // TODO why does this happen?
 
 			chunk.imports.forEach(file => {
-				chunk_dependencies.add(lookup.get(file));
+				const dep = lookup.get(file)
+				if (!dep) {
+					console.warn(`Could not find entry chunk dependency for ${file}. Have dependencies for: ${Array.from(lookup.keys())}`)
+					return
+				}
+
+				chunk_dependencies.add(dep);
 			});
 
 			if (chunks_with_css.has(chunk)) {
