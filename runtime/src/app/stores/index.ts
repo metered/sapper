@@ -35,7 +35,7 @@ export function page_store<T>(value: T): PageStore<T> {
 	}
 
 	function subscribe(run: Subscriber<T>): Unsubscriber {
-		let old_value;
+		let old_value: T;
 		return store.subscribe((value) => {
 			if (old_value === undefined || (ready && value !== old_value)) {
 				run(old_value = value);

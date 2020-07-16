@@ -1,101 +1,167 @@
+/// <reference lib="dom" />
+
 import { writable } from 'svelte/store';
-import App from '@sapper/internal/App.svelte';
-import { root_preload, ErrorComponent, ignore, components, routes } from '@sapper/internal/manifest-client';
+import App, {
+	AppProps,
+	AppContext,
+	BrowserAppPropsUpdate,
+	BrowserAppPropsInit,
+} from '@sapper/internal/App.svelte';
 import {
+	Redirect,
+	PreloadError,
+	Query,
+	Page,
+	ComponentModule,
+	ComponentConstructor,
+	Level,
+	Session,
+	PreloadContext,
+	ErrorProps,
+	CONTEXT_KEY,
+	Preloader,
+	ContextInit,
+	Stores,
+} from '@sapper/internal/shared';
+import {
+	root_preload,
+	ErrorComponent,
+	ignore,
+	components,
+	routes,
 	Target,
 	ScrollPosition,
-	Component,
-	Redirect,
 	ComponentLoader,
-	ComponentConstructor,
-	Route,
-	Query,
-	Page
-} from './types';
+	Branch,
+	Preload,
+	Fetch,
+	History,
+} from '@sapper/internal/manifest-client';
+
 import goto from './goto';
 import { page_store } from './stores';
 
-declare const __SAPPER__;
-export const initial_data = typeof __SAPPER__ !== 'undefined' && __SAPPER__;
+type InitialData = {
+	error?: Error
+	baseUrl?: string
+	status: number
+	preloaded: unknown[]
+	session: Session
+};
+
+declare const __SAPPER__: InitialData
+
+type HydratedTarget = {
+	redirect?: Redirect;
+	preload_error?: PreloadError,
+	props: AppProps<unknown>;
+	branch: Branch<unknown>[];
+}
+
+export const initial_data: InitialData = typeof __SAPPER__ !== 'undefined' ?
+		__SAPPER__ :
+	{ session: {}, preloaded: [], status: 200 };
 
 let ready = false;
-let root_component: Component;
+let root_component: InstanceType<typeof App>;
 let current_token: {};
-let root_preloaded: Promise<any>;
-let current_branch = [];
+let root_preloaded: unknown;
+let current_branch: Branch<unknown>[] = [];
 let current_query = '{}';
+
+let _fetch: Fetch = typeof fetch !== 'undefined' ? (req: any, init?: any) => fetch(req, init) : () => { throw new Error("fetch not supported here.") }
 
 const stores = {
 	page: page_store({}),
-	preloading: writable(null),
-	session: writable(initial_data && initial_data.session)
+	preloading: writable<null | boolean>(null),
+	session: writable(initial_data.session),
+	fetch: writable(_fetch),
 };
 
-let $session;
+let $session: Session | undefined;
 let session_dirty: boolean;
 
 stores.session.subscribe(async value => {
 	$session = value;
 
-	if (!ready) return;
+	if (!ready || !session_dirty) return;
+
 	session_dirty = true;
 
 	const target = select_target(new URL(location.href));
+	if (!target) return;
 
 	const token = current_token = {};
 	const { redirect, props, branch } = await hydrate_target(target);
 	if (token !== current_token) return; // a secondary navigation happened while we were loading
-
-	await render(redirect, branch, props, target.page);
+	if (redirect) {
+		await goto(redirect.location, { replaceState: true });
+	} else {
+		await render(branch, props, target.page);
+	}
 });
 
 export let prefetching: {
 	href: string;
-	promise: Promise<{ redirect?: Redirect, data?: any }>;
-} = null;
-export function set_prefetching(href, promise) {
+	promise: Promise<HydratedTarget>;
+} | null = null;
+export function set_prefetching(href: string, promise: Promise<HydratedTarget>) {
 	prefetching = { href, promise };
+	return prefetching
 }
 
 export let target: Node;
-export function set_target(element) {
+export function set_target(element: Node) {
 	target = element;
 }
 
 export let uid = 1;
-export function set_uid(n) {
+export function set_uid(n: number) {
 	uid = n;
 }
 
 export let cid: number;
-export function set_cid(n) {
+export function set_cid(n: number) {
 	cid = n;
 }
 
-const _history = typeof history !== 'undefined' ? history : {
-	pushState: (state: any, title: string, href: string) => {},
-	replaceState: (state: any, title: string, href: string) => {},
-	scrollRestoration: ''
+let _history: History = typeof history !== 'undefined' ? history : {
+	pushState: (state: unknown, title: string, href: string): void => {},
+	replaceState: (state: unknown, title: string, href: string): void => {},
+	scrollRestoration: 'auto'
 };
 export { _history as history };
 
+let preloader: Preloader<typeof fetch>
+let inital_contexts_setter: ContextInit<Stores<Fetch>> | undefined
+
+export function set_base_context(c: AppContext) {
+	_fetch = c.fetch
+	preloader = c.preload
+	inital_contexts_setter = c.layout
+	_history = c.history
+	stores.fetch.set(c.fetch)
+}
 export const scroll_history: Record<string, ScrollPosition> = {};
 
-export function extract_query(search: string) {
+export function extract_query(search: string): Query {
 	const query = Object.create(null);
 	if (search.length > 0) {
 		search.slice(1).split('&').forEach(searchParam => {
-			let [, key, value = ''] = /([^=]*)(?:=(.*))?/.exec(decodeURIComponent(searchParam.replace(/\+/g, ' ')));
+			const m = /([^=]*)(?:=(.*))?/.exec(decodeURIComponent(searchParam.replace(/\+/g, ' '))) || [];
+			const key = m[1]
+			const value = m[2] || true
 			if (typeof query[key] === 'string') query[key] = [<string>query[key]];
-			if (typeof query[key] === 'object') (query[key] as string[]).push(value);
+			if (typeof query[key] === 'object') (query[key] as string[]).push(value === true ? '' : value);
 			else query[key] = value;
 		});
 	}
 	return query;
 }
 
-export function select_target(url: URL): Target {
+export function select_target(url: URL): Target | null {
 	if (url.origin !== location.origin) return null;
+	if (initial_data.baseUrl === undefined) return null;
 	if (!url.pathname.startsWith(initial_data.baseUrl)) return null;
 
 	let path = url.pathname.slice(initial_data.baseUrl.length);
@@ -105,7 +171,7 @@ export function select_target(url: URL): Target {
 	}
 
 	// avoid accidental clashes between server routes and page routes
-	if (ignore.some(pattern => pattern.test(path))) return;
+	if (ignore.some(pattern => pattern.test(path))) return null;
 
 	for (let i = 0; i < routes.length; i += 1) {
 		const route = routes[i];
@@ -113,7 +179,7 @@ export function select_target(url: URL): Target {
 		const match = route.pattern.exec(path);
 
 		if (match) {
-			const query: Query = extract_query(url.search);
+			const query = extract_query(url.search);
 			const part = route.parts[route.parts.length - 1];
 			const params = part.params ? part.params(match) : {};
 
@@ -122,35 +188,26 @@ export function select_target(url: URL): Target {
 			return { href: url.href, route, match, page };
 		}
 	}
+
+	return null
 }
 
-export function handle_error(url: URL) {
-	const { host, pathname, search } = location;
-	const { session, preloaded, status, error } = initial_data;
+export function handle_error(url: URL, status: number, error: Error) {
+	const { host, pathname, search } = url;
 
-	if (!root_preloaded) {
-		root_preloaded = preloaded && preloaded[0]
-	}
-
-	const props = {
-		error,
-		status,
-		session,
-		level0: {
-			props: root_preloaded
-		},
+	const props: BrowserAppPropsUpdate<ErrorProps> = {
+		stores,
 		level1: {
 			props: {
+				error,
 				status,
-				error
 			},
 			component: ErrorComponent
 		},
-		segments: preloaded
-
+		segments: pathname.split('/').filter(Boolean),
 	}
 	const query = extract_query(search);
-	render(null, [], props, { host, path: pathname, query, params: {} });
+	render([], props, { host, path: pathname, query, params: {} });
 }
 
 export function scroll_state() {
@@ -160,7 +217,7 @@ export function scroll_state() {
 	};
 }
 
-export async function navigate(target: Target, id: number, noscroll?: boolean, hash?: string): Promise<any> {
+export async function navigate(target: Target, id: number | null, noscroll?: boolean, hash?: string): Promise<void> {
 	if (id) {
 		// popstate or initial navigation
 		cid = id;
@@ -185,11 +242,16 @@ export async function navigate(target: Target, id: number, noscroll?: boolean, h
 	prefetching = null;
 
 	const token = current_token = {};
-	const { redirect, props, branch } = await loaded;
+	const loaded_result = await loaded
+	const { redirect } = loaded_result;
 	if (token !== current_token) return; // a secondary navigation happened while we were loading
-
-	await render(redirect, branch, props, target.page);
-	if (document.activeElement) document.activeElement.blur();
+	if (redirect) {
+		await goto(redirect.location, { replaceState: true });
+	} else {
+		const { props, branch } = loaded_result
+		await render(branch, props, target.page);
+	}
+	if (document.activeElement && (document.activeElement instanceof HTMLElement)) document.activeElement.blur();
 
 	if (!noscroll) {
 		let scroll = scroll_history[id];
@@ -211,20 +273,26 @@ export async function navigate(target: Target, id: number, noscroll?: boolean, h
 	}
 }
 
-async function render(redirect: Redirect, branch: any[], props: any, page: Page) {
-	if (redirect) return goto(redirect.location, { replaceState: true });
-
+async function render<L1>(branch: Branch<unknown>[], _props: BrowserAppPropsUpdate<L1>, page: Page) {
 	stores.page.set(page);
 	stores.preloading.set(false);
 
 	if (root_component) {
-		root_component.$set(props);
+		root_component.$set(_props);
 	} else {
-		props.stores = {
-			page: { subscribe: stores.page.subscribe },
-			preloading: { subscribe: stores.preloading.subscribe },
-			session: stores.session
-		};
+		const props = _props as BrowserAppPropsInit<typeof root_preloaded, L1>
+		props.context_init = (input) => {
+			input.setContext(CONTEXT_KEY, {
+				page: { subscribe: stores.page.subscribe },
+				preloading: { subscribe: stores.preloading.subscribe },
+				session: stores.session,
+				fetch: { subscribe: stores.fetch.subscribe },
+			});
+
+			if (inital_contexts_setter) {
+				inital_contexts_setter(input)
+			}
+		}			
 		props.level0 = {
 			props: await root_preloaded
 		};
@@ -235,7 +303,7 @@ async function render(redirect: Redirect, branch: any[], props: any, page: Page)
 		const end = document.querySelector('#sapper-head-end');
 
 		if (start && end) {
-			while (start.nextSibling !== end) detach(start.nextSibling);
+			while (start.nextSibling && start.nextSibling !== end) detach(start.nextSibling);
 			detach(start);
 			detach(end);
 		}
@@ -253,7 +321,7 @@ async function render(redirect: Redirect, branch: any[], props: any, page: Page)
 	session_dirty = false;
 }
 
-function part_changed(i, segment, match, stringified_query) {
+function part_changed(i: number, segment: string, match: RegExpExecArray, stringified_query: string) {
 	// TODO only check query string changes for preload functions
 	// that do in fact depend on it (using static analysis or
 	// runtime instrumentation)
@@ -270,34 +338,38 @@ function part_changed(i, segment, match, stringified_query) {
 	}
 }
 
-export async function hydrate_target(target: Target): Promise<{
-	redirect?: Redirect;
-	props?: any;
-	branch?: Array<{ Component: ComponentConstructor, preload: (page) => Promise<any>, segment: string }>;
-}> {
+export async function hydrate_target(target: Target): Promise<HydratedTarget> {
 	const { route, page } = target;
+
+	if (!$session) {
+		throw new Error("Internal error: $session is not yet defined")
+	}
+
 	const segments = page.path.split('/').filter(Boolean);
 
-	let redirect: Redirect = null;
+	let redirect: Redirect | undefined = undefined;
+	let preload_error: PreloadError | undefined = undefined
 
-	const props = { error: null, status: 200, segments: [segments[0]] };
+	const props: AppProps<unknown> = { stores, segments: [segments[0]] };
 
-	const preload_context = {
-		fetch: (url: string, opts?: any) => fetch(url, opts),
+	const preload_context: PreloadContext<Fetch> = {
+		fetch: (info: RequestInfo, init?: RequestInit) => _fetch(info, init),
 		redirect: (statusCode: number, location: string) => {
 			if (redirect && (redirect.statusCode !== statusCode || redirect.location !== location)) {
 				throw new Error(`Conflicting redirects`);
 			}
 			redirect = { statusCode, location };
 		},
-		error: (status: number, error: Error | string) => {
-			props.error = typeof error === 'string' ? new Error(error) : error;
-			props.status = status;
+		error: (statusCode: number, error: Error | string) => {
+			preload_error = {
+				error: typeof error === 'string' ? new Error(error) : error,
+				statusCode,
+			}
 		}
 	};
 
 	if (!root_preloaded) {
-		root_preloaded = initial_data.preloaded[0] || root_preload.call(preload_context, {
+		root_preloaded = initial_data.preloaded[0] || preloader(preload_context, root_preload, {
 			host: page.host,
 			path: page.path,
 			query: page.query,
@@ -305,12 +377,15 @@ export async function hydrate_target(target: Target): Promise<{
 		}, $session);
 	}
 
-	let branch;
+	let branch: Branch<unknown>[];
 	let l = 1;
 
 	try {
 		const stringified_query = JSON.stringify(page.query);
 		const match = route.pattern.exec(page.path);
+		if (!match) {
+			throw Error(`Internal error: route pattern ${route.pattern} doesn't match path: ${page.path}`)
+		}
 
 		let segment_dirty = false;
 
@@ -334,8 +409,11 @@ export async function hydrate_target(target: Target): Promise<{
 
 			let preloaded;
 			if (ready || !initial_data.preloaded[i + 1]) {
+				if (!$session) {
+					throw new Error("Internal error: $session is not yet defined")
+				}
 				preloaded = preload
-					? await preload.call(preload_context, {
+					? await preloader(preload_context, preload, {
 						host: page.host,
 						path: page.path,
 						query: page.query,
@@ -346,22 +424,25 @@ export async function hydrate_target(target: Target): Promise<{
 				preloaded = initial_data.preloaded[i + 1];
 			}
 
-			return (props[`level${j}`] = { component, props: preloaded, segment, match, part: part.i });
+			const level: Level = { component, props: preloaded, segment, match, part: part.i }
+			return ((props as any)[`level${j}`] = level);
 		}));
 	} catch (error) {
-		props.error = error;
-		props.status = 500;
+		preload_error = {
+			error: error,
+			statusCode: 500.
+		}
 		branch = [];
 	}
 
-	return { redirect, props, branch };
+	return { redirect, preload_error, props, branch };
 }
 
 function load_css(chunk: string) {
 	const href = `client/${chunk}`;
 	if (document.querySelector(`link[href="${href}"]`)) return;
 
-	return new Promise((fulfil, reject) => {
+	return new Promise<void>((fulfil, reject) => {
 		const link = document.createElement('link');
 		link.rel = 'stylesheet';
 		link.href = href;
@@ -373,17 +454,24 @@ function load_css(chunk: string) {
 	});
 }
 
-export function load_component(component: ComponentLoader): Promise<{
-	default: ComponentConstructor,
-	preload?: (input: any) => any
+export async function load_component<T>(component: ComponentLoader<T>): Promise<{
+	default: ComponentConstructor<T>,
+	preload?: Preload<T>
 }> {
 	// TODO this is temporary — once placeholders are
 	// always rewritten, scratch the ternary
-	const promises: Array<Promise<any>> = (typeof component.css === 'string' ? [] : component.css.map(load_css));
+	const promises: any[] = (typeof component.css === 'string' ? [] : component.css.map(load_css));
 	promises.unshift(component.js());
-	return Promise.all(promises).then(values => values[0]);
+
+	// NB TypeScript's definition of Promise.all doesn't have a generic definition for [head, ...rest]
+	const values = await Promise.all(promises)
+	return values[0] as ComponentModule
 }
 
 function detach(node: Node) {
+	if (!node.parentNode) {
+		console.warn("Could not detach orphaned node because it has no parentNode", node)
+		return
+	}
 	node.parentNode.removeChild(node);
 }

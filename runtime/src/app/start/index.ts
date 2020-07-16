@@ -10,13 +10,20 @@ import {
 	set_target,
 	uid,
 	set_uid,
-	set_cid
+	set_cid,
+	set_base_context
 } from '../app';
 import prefetch from '../prefetch/index';
+import { AppContextSeed } from '@sapper/internal/App.svelte'
 
 export default function start(opts: {
 	target: Node
+	context?: AppContextSeed
 }) {
+	if (opts.context) {
+		set_base_context(opts.context(initial_data.session));
+	}
+
 	if ('scrollRestoration' in history) {
 		history.scrollRestoration = 'manual';
 	}
@@ -50,14 +57,14 @@ export default function start(opts: {
 
 		const url = new URL(location.href);
 
-		if (initial_data.error) return handle_error(url);
+		if (initial_data.error) return handle_error(url, initial_data.status, initial_data.error);
 
 		const target = select_target(url);
 		if (target) return navigate(target, uid, true, hash);
 	});
 }
 
-let mousemove_timeout: NodeJS.Timer;
+let mousemove_timeout: ReturnType<typeof setTimeout>;
 
 function handle_mousemove(event: MouseEvent) {
 	clearTimeout(mousemove_timeout);
@@ -121,7 +128,7 @@ function which(event: MouseEvent) {
 	return event.which === null ? event.button : event.which;
 }
 
-function find_anchor(node: Node) {
+function find_anchor(node: Node | null) {
 	while (node && node.nodeName.toUpperCase() !== 'A') node = node.parentNode; // SVG <a> elements have a lowercase name
 	return node;
 }

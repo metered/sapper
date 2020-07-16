@@ -3,15 +3,18 @@ import fs from 'fs';
 import path from 'path';
 import cookie from 'cookie';
 import devalue from 'devalue';
-import fetch from 'node-fetch';
 import URL from 'url';
-import { Manifest, Page, Req, Res } from './types';
-import { build_dir, dev, src_dir } from '@sapper/internal/manifest-server';
-import App from '@sapper/internal/App.svelte';
+import { Session, Redirect, PreloadError, PreloadContext, CONTEXT_KEY } from '@sapper/internal/shared';
+import { build_dir, dev, src_dir, Manifest, Page, Req, Res, SSRLevel, Fetch, FetchRequestInfo, FetchRequestInit, BaseContextSeed } from '@sapper/internal/manifest-server';
+import App, { SSRAppPropsRender } from '@sapper/internal/App.svelte';
+import { Headers as FetchHeaders } from 'node-fetch'
+import { ErrorComponent } from '@sapper/internal/manifest-client';
 
-export function get_page_handler(
+
+export function get_page_handler<Rq extends Req, Rs extends Res>(
 	manifest: Manifest,
-	session_getter: (req: Req, res: Res) => Promise<any>
+	session_getter: (req: Rq, res: Rs) => Session | Promise<Session>,
+	base_context_getter: BaseContextSeed<Rq, Rs>,
 ) {
 	const get_build_info = dev
 		? () => JSON.parse(fs.readFileSync(path.join(build_dir, 'build.json'), 'utf-8'))
@@ -23,7 +26,7 @@ export function get_page_handler(
 
 	const has_service_worker = fs.existsSync(path.join(build_dir, 'service-worker.js'));
 
-	const { server_routes, pages } = manifest;
+	const { pages } = manifest;
 	const error_route = manifest.error;
 
 	function bail(req: Req, res: Res, err: Error) {
@@ -35,7 +38,7 @@ export function get_page_handler(
 		res.end(`<pre>${message}</pre>`);
 	}
 
-	function handle_error(req: Req, res: Res, statusCode: number, error: Error | string) {
+	function handle_error(req: Rq, res: Rs, statusCode: number, error: Error) {
 		handle_page({
 			pattern: null,
 			parts: [
@@ -44,12 +47,17 @@ export function get_page_handler(
 		}, req, res, statusCode, error || new Error('Unknown error in preload function'));
 	}
 
-	async function handle_page(page: Page, req: Req, res: Res, status = 200, error: Error | string = null) {
+	async function handle_page<Props>(page: Page<Props>, req: Rq, res: Rs, status = 200, error: Error | null = null) {
+		console.log({ page, error })
 		const is_service_worker_index = req.path === '/service-worker-index.html';
 		const build_info: {
 			bundler: 'rollup' | 'webpack',
 			shimport: string | null,
 			assets: Record<string, string | string[]>,
+			css: {
+				main?: string,
+				chunks: Record<string, string[]>
+			},
 			legacy_assets?: Record<string, string>
 		 } = get_build_info();
 
@@ -62,6 +70,7 @@ export function get_page_handler(
 		if (!error && !is_service_worker_index) {
 			page.parts.forEach(part => {
 				if (!part) return;
+				if (!part.name) return;
 
 				// using concat because it could be a string or an array. thanks webpack!
 				preloaded_chunks = preloaded_chunks.concat(build_info.assets[part.name]);
@@ -88,17 +97,18 @@ export function get_page_handler(
 			res.setHeader('Link', link);
 		}
 
-		let session;
+		let session: Session = {};
 		try {
 			session = await session_getter(req, res);
 		} catch (err) {
 			return bail(req, res, err);
 		}
 
-		let redirect: { statusCode: number, location: string };
-		let preload_error: { statusCode: number, message: Error | string };
+		let redirect = <Redirect | undefined> undefined;
+		let preload_error: PreloadError | undefined = undefined;
 
-		const preload_context = {
+		const base_context = base_context_getter(req, res)
+		const preload_context: PreloadContext<Fetch> = {
 			redirect: (statusCode: number, location: string) => {
 				if (redirect && (redirect.statusCode !== statusCode || redirect.location !== location)) {
 					throw new Error(`Conflicting redirects`);
@@ -107,25 +117,29 @@ export function get_page_handler(
 				redirect = { statusCode, location };
 			},
 			error: (statusCode: number, message: Error | string) => {
-				preload_error = { statusCode, message };
+				preload_error = { statusCode, error: typeof message === 'string' ? new Error(message) : message };
 			},
-			fetch: (url: string, opts?: any) => {
+			fetch: (url: FetchRequestInfo, init?: FetchRequestInit) => {
+				if (typeof url !== 'string') {
+					return base_context.fetch(url, init)
+				}
+
 				const parsed = new URL.URL(url, `http://127.0.0.1:${process.env.PORT}${req.baseUrl ? req.baseUrl + '/' :''}`);
 
-				opts = Object.assign({}, opts);
+				init = Object.assign({}, init);
 
 				const include_credentials = (
-					opts.credentials === 'include' ||
-					opts.credentials !== 'omit' && parsed.origin === `http://127.0.0.1:${process.env.PORT}`
+					init.credentials === 'include' ||
+					init.credentials !== 'omit' && parsed.origin === `http://127.0.0.1:${process.env.PORT}`
 				);
 
 				if (include_credentials) {
-					opts.headers = Object.assign({}, opts.headers);
+					const init_headers = init.headers = new FetchHeaders(init.headers);
 
 					const cookies = Object.assign(
 						{},
 						cookie.parse(req.headers.cookie || ''),
-						cookie.parse(opts.headers.cookie || '')
+						cookie.parse(init_headers.get('cookie') || '')
 					);
 
 					const set_cookie = res.getHeader('Set-Cookie');
@@ -138,24 +152,24 @@ export function get_page_handler(
 						.map(key => `${key}=${cookies[key]}`)
 						.join('; ');
 
-					opts.headers.cookie = str;
+					init_headers.set('cookie', str);
 
-					if (!opts.headers.authorization && req.headers.authorization) {
-						opts.headers.authorization = req.headers.authorization;
+					if (!init_headers.get('authorization') && req.headers.authorization) {
+						init_headers.set('authorization', req.headers.authorization);
 					}
 				}
 
-				return fetch(parsed.href, opts);
+				return base_context.fetch(parsed.href, init);
 			}
 		};
 
-		let preloaded;
-		let match;
-		let params;
+		let preloaded: unknown[];
+		let match: RegExpMatchArray | null;
+		let params = <Record<string, string> | undefined> undefined;
 
 		try {
 			const root_preloaded = manifest.root_preload
-				? manifest.root_preload.call(preload_context, {
+				? base_context.preload(preload_context, manifest.root_preload, {
 					host: req.headers.host,
 					path: req.path,
 					query: req.query,
@@ -163,8 +177,7 @@ export function get_page_handler(
 				}, session)
 				: {};
 
-			match = error ? null : page.pattern.exec(req.path);
-
+			match = (error || !page.pattern) ? null : page.pattern.exec(req.path);
 
 			let toPreload = [root_preloaded];
 			if (!is_service_worker_index) {
@@ -175,7 +188,7 @@ export function get_page_handler(
 					params = part.params ? part.params(match) : {};
 
 					return part.preload
-						? part.preload.call(preload_context, {
+						? base_context.preload(preload_context, part.preload, {
 							host: req.headers.host,
 							path: req.path,
 							query: req.query,
@@ -191,7 +204,7 @@ export function get_page_handler(
 				return bail(req, res, err)
 			}
 
-			preload_error = { statusCode: 500, message: err };
+			preload_error = { statusCode: 500, error: err };
 			preloaded = []; // appease TypeScript
 		}
 
@@ -207,7 +220,7 @@ export function get_page_handler(
 			}
 
 			if (preload_error) {
-				handle_error(req, res, preload_error.statusCode, preload_error.message);
+				handle_error(req, res, preload_error.statusCode, preload_error.error);
 				return;
 			}
 
@@ -223,44 +236,58 @@ export function get_page_handler(
 				l++;
 			});
 
-			const props = {
-				stores: {
-					page: {
-						subscribe: writable({
-							host: req.headers.host,
-							path: req.path,
-							query: req.query,
-							params
-						}).subscribe
-					},
-					preloading: {
-						subscribe: writable(null).subscribe
-					},
-					session: writable(session)
+			const stores = {
+				page: {
+					subscribe: writable({
+						host: req.headers.host,
+						path: req.path,
+						query: req.query,
+						params
+					}).subscribe
 				},
+				preloading: {
+					subscribe: writable(null).subscribe
+				},
+				session: writable(session),
+				fetch: writable(base_context.fetch),
+			}
+			const props: SSRAppPropsRender<unknown, unknown> = {
+				context_init: (input) => {
+					input.setContext(CONTEXT_KEY, stores);
+
+					if (base_context.layout) {
+						base_context.layout(input)
+					}
+				},
+				stores,
 				segments: layout_segments,
-				status: error ? status : 200,
-				error: error ? error instanceof Error ? error : { message: error } : null,
 				level0: {
 					props: preloaded[0]
 				},
-				level1: {
-					segment: segments[0],
-					props: {}
+				level1: error ? {
+					component: manifest.error,
+					props: {
+						error,
+						status
+					}
+				} : {
+					component: page.parts[0]?.component,
+					props: preloaded[1] || {},
 				}
 			};
 
-			if (!is_service_worker_index) {
-				let l = 1;
-				for (let i = 0; i < page.parts.length; i += 1) {
+			if (!is_service_worker_index && !error) {
+				let l = 2;
+				for (let i = 1; i < page.parts.length; i += 1) {
 					const part = page.parts[i];
 					if (!part) continue;
 
-					props[`level${l++}`] = {
+					const level: SSRLevel<unknown> = {
 						component: part.component,
 						props: preloaded[i + 1] || {},
 						segment: segments[i]
 					};
+					(props as any)[`level${l++}`] = level
 				}
 			}
 
@@ -271,7 +298,7 @@ export function get_page_handler(
 				session: session && try_serialize(session, err => {
 					throw new Error(`Failed to serialize session data: ${err.message}`);
 				}),
-				error: error && serialize_error(props.error)
+				error: preload_error ? serialize_error(preload_error.error) : error ? serialize_error(error) : undefined,
 			};
 
 			let script = `__SAPPER__={${[
@@ -285,7 +312,7 @@ export function get_page_handler(
 				script += `if('serviceWorker' in navigator)navigator.serviceWorker.register('${req.baseUrl}/service-worker.js');`;
 			}
 
-			const file = [].concat(build_info.assets.main).filter(file => file && /\.js$/.test(file))[0];
+			const file = new Array<string>().concat(build_info.assets.main).filter(file => file && /\.js$/.test(file))[0];
 			const main = `${req.baseUrl}/client/${file}`;
 
 			if (build_info.bundler === 'rollup') {
@@ -304,10 +331,11 @@ export function get_page_handler(
 			// TODO make this consistent across apps
 			// TODO embed build_info in placeholder.ts
 			if (build_info.css && build_info.css.main) {
-				const css_chunks = new Set();
+				const css_chunks = new Set<string>();
 				if (build_info.css.main) css_chunks.add(build_info.css.main);
 				page.parts.forEach(part => {
 					if (!part) return;
+					if (!part.file) return;
 					const css_chunks_for_part = build_info.css.chunks[part.file];
 
 					if (css_chunks_for_part) {
@@ -345,21 +373,23 @@ export function get_page_handler(
 		}
 	}
 
-	return function find_route(req: Req, res: Res, next: () => void) {
+	return function find_route(req: Rq, res: Rs, next: () => void) {
 		if (req.path === '/service-worker-index.html') {
-			const homePage = pages.find(page => page.pattern.test('/'));
-			handle_page(homePage, req, res);
-			return;
+			const homePage = pages.find(page => page.pattern?.test('/'));
+			if (homePage) {
+				handle_page(homePage, req, res);
+				return;
+			}
 		}
 
 		for (const page of pages) {
-			if (page.pattern.test(req.path)) {
+			if (page.pattern?.test(req.path)) {
 				handle_page(page, req, res);
 				return;
 			}
 		}
 
-		handle_error(req, res, 404, 'Not found');
+		handle_error(req, res, 404, new Error('Not found'));
 	};
 }
 
@@ -367,7 +397,7 @@ function read_template(dir = build_dir) {
 	return fs.readFileSync(`${dir}/template.html`, 'utf-8');
 }
 
-function try_serialize(data: any, fail?: (err) => void) {
+function try_serialize(data: any, fail?: (err: Error) => void) {
 	try {
 		return devalue(data);
 	} catch (err) {
