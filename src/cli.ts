@@ -272,7 +272,7 @@ prog.parse(process.argv, { unknown: (arg: string) => `Unknown option: ${arg}` })
 
 
 async function _build(
-	bundler: 'rollup' | 'webpack',
+	bundler: 'rollup' | 'webpack' | undefined,
 	legacy: boolean,
 	cwd: string,
 	src: string,
