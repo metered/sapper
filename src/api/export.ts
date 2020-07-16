@@ -32,7 +32,8 @@ type Opts = {
 type Ref = {
 	uri: string,
 	rel: string,
-	as: string
+	// 'as' list is from https://fetch.spec.whatwg.org/#concept-request-destination, referenced by https://developer.mozilla.org/en-US/docs/Web/HTML/Preloading_content
+	as?: 'audio' | 'audioworklet' | 'document' | 'embed' | 'fetch' | 'font' | 'frame' | 'iframe' | 'image' | 'manifest' | 'object' | 'paintworklet' | 'report' | 'script' | 'serviceworker' | 'sharedworker' | 'style' | 'track' | 'worker' | 'video' | 'xslt'
 };
 
 type URL = url.UrlWithStringQuery;
@@ -109,11 +110,11 @@ async function _export({
 	const seen = new Set();
 	const saved = new Set();
 
-	function save(url: string, status: number, type: string, body: string) {
+	function save(url: string, status: number, type: string, body: string): undefined | Promise<void> {
 		let { pathname } = resolve(origin, url);
 		let file = decodeURIComponent(pathname.slice(1));
 
-		if (saved.has(file)) return;
+		if (saved.has(file)) return undefined;
 		saved.add(file);
 
 		const is_html = type === 'text/html';
@@ -132,7 +133,7 @@ async function _export({
 		});
 
 		const export_file = path.join(export_dir, file);
-		if (fs.existsSync(export_file)) return;
+		if (fs.existsSync(export_file)) return undefined;
 		mkdirp(path.dirname(export_file));
 
 		return writeFile(export_file, body);

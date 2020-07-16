@@ -10,4 +10,6 @@ export function find_page(pathname: string, cwd = 'src/routes') {
 			return page.parts[page.parts.length - 1].component.file;
 		}
 	}
+
+	return undefined
 }

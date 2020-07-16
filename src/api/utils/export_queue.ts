@@ -2,6 +2,14 @@ import * as url from 'url';
 
 type URL = url.UrlWithStringQuery;
 
+type FetchResponse = {
+	text(): Promise<string>
+	status: number
+	headers: {
+		get(name: string): string | null
+	}
+}
+
 type FetchOpts = {
 	timeout: number;
 	protocol: string;
@@ -11,7 +19,7 @@ type FetchOpts = {
 };
 
 type FetchRet = {
-	response: Response;
+	response: FetchResponse;
 	url: URL;
 };
 
@@ -105,8 +113,10 @@ function exportQueue({ concurrent, handleFetch, handleResponse, fetchOpts, callb
 			urls.push(url);
 			return processQueue();
 		},
-		addSave: (p: Promise<any>) => {
-			addToQueue(p, saving);
+		addSave: (p: Promise<any> | undefined) => {
+			if (p !== undefined) {
+				addToQueue(p, saving);
+			}
 			return processQueue();
 		},
 		setCallback: (event: string, fn: Function) => {

@@ -49,22 +49,22 @@ class Watcher extends EventEmitter {
 	port: number;
 	closed: boolean;
 
-	dev_port: number;
-	live: boolean;
-	hot: boolean;
+	dev_port?: number;
+	live?: boolean;
+	hot?: boolean;
 
-	devtools_port: number;
+	devtools_port?: number;
 
-	dev_server: DevServer;
-	proc: child_process.ChildProcess;
+	dev_server?: DevServer;
+	proc?: child_process.ChildProcess | null;
 	filewatchers: Array<{ close: () => void }>;
-	deferred: Deferred;
+	deferred?: Deferred;
 
-	crashed: boolean;
-	restarting: boolean;
+	crashed?: boolean;
+	restarting?: boolean;
 	current_build: {
 		changed: Set<string>;
-		rebuilding: Set<string>;
+		rebuilding: Set<'server' | 'client' | 'serviceworker'>;
 		unique_warnings: Set<string>;
 		unique_errors: Set<string>;
 	}
@@ -82,7 +82,7 @@ class Watcher extends EventEmitter {
 		hot,
 		'devtools-port': devtools_port,
 		bundler,
-		port = +process.env.PORT,
+		port = +(process.env.PORT || '0'),
 		ext
 	}: Opts) {
 		super();
@@ -120,7 +120,7 @@ class Watcher extends EventEmitter {
 		// remove this in a future version
 		const template = read_template(src);
 		if (template.indexOf('%sapper.base%') === -1) {
-			const error = new Error(`As of Sapper v0.10, your template.html file must include %sapper.base% in the <head>`);
+			const error: Error & { code?: string } = new Error(`As of Sapper v0.10, your template.html file must include %sapper.base% in the <head>`);
 			error.code = `missing-sapper-base`;
 			throw error;
 		}
@@ -253,11 +253,11 @@ class Watcher extends EventEmitter {
 									process: this.proc
 								});
 
-								if (this.hot && this.bundler === 'webpack') {
+								if (this.hot && this.bundler === 'webpack' && this.dev_server) {
 									this.dev_server.send({
 										status: 'completed'
 									});
-								} else if (this.live) {
+								} else if (this.live && this.dev_server) {
 									this.dev_server.send({
 										action: 'reload'
 									});
@@ -387,7 +387,7 @@ class Watcher extends EventEmitter {
 		});
 	}
 
-	restart(filename: string, type: string) {
+	restart(filename: string, type: 'client' | 'server' | 'serviceworker') {
 		if (this.restarting) {
 			this.current_build.changed.add(filename);
 			this.current_build.rebuilding.add(type);
@@ -448,7 +448,7 @@ const INTERVAL = 10000;
 
 class DevServer {
 	clients: Set<http.ServerResponse>;
-	interval: NodeJS.Timer;
+	interval: ReturnType<typeof setTimeout>;
 	_: http.Server;
 
 	constructor(port: number, interval = 10000) {
