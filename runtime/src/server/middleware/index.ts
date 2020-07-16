@@ -1,23 +1,27 @@
 import fs from 'fs';
 import path from 'path';
 import mime from 'mime/lite';
-import { build_dir, dev, manifest } from '@sapper/internal/manifest-server';
-import { Handler, Req, Res } from './types';
+import { build_dir, dev, manifest, Handler, Req, Res, ErrorHandler, BaseContextSeed, SessionSeed } from '@sapper/internal/manifest-server';
 import { get_server_route_handler } from './get_server_route_handler';
 import { get_page_handler } from './get_page_handler';
+import nodeFetch from 'node-fetch';
 
-type IgnoreValue = Array | RegExp | function | string;
+type IgnoreValue = Array<IgnoreValue> | RegExp | ((uri: string) => boolean) | string;
 
-export default function middleware(opts: {
-	session?: (req: Req, res: Res) => any,
-	ignore?: IgnoreValue
-} = {}) {
-	const { session, ignore } = opts;
+export type MiddlewareOptions<Rq extends Req, Rs extends Res> = {
+	session?: SessionSeed<Rq, Rs>,
+	context?: BaseContextSeed<Rq, Rs>,
+	ignore?: IgnoreValue,
+	error_handler?: ErrorHandler<Rq, Rs>,
+}
+
+export default function middleware<Rq extends Req, Rs extends Res>(opts: MiddlewareOptions<Rq, Rs> = {}) {
+	const { session, error_handler, context, ignore } = opts;
 
 	let emitted_basepath = false;
 
-	return compose_handlers(ignore, [
-		(req: Req, res: Res, next: () => void) => {
+	return compose_handlers<Rq, Rs>(ignore, [
+		(req: Rq, res: Rs, next: () => void) => {
 			if (req.baseUrl === undefined) {
 				let { originalUrl } = req;
 				if (req.url === '/' && originalUrl[originalUrl.length - 1] !== '/') {
@@ -61,16 +65,23 @@ export default function middleware(opts: {
 			cache_control: dev ? 'no-cache' : 'max-age=31536000, immutable'
 		}),
 
-		get_server_route_handler(manifest.server_routes),
+		get_server_route_handler({
+			routes: manifest.server_routes, 
+			error_handler
+		}),
 
-		get_page_handler(manifest, session || noop)
-	].filter(Boolean));
+		get_page_handler(
+			manifest,
+			session || noopSession,
+			context || noopContext,
+		)
+	].filter(Boolean) as Handler<Rq & Req, Rs & Res>[]);
 }
 
-export function compose_handlers(ignore: IgnoreValue, handlers: Handler[]): Handler {
+export function compose_handlers<Rq extends Req, Rs extends Res>(ignore: IgnoreValue | undefined, handlers: Handler<Rq, Rs>[]): Handler<Rq, Rs> {
 	const total = handlers.length;
 
-	function nth_handler(n: number, req: Req, res: Res, next: () => void) {
+	function nth_handler(n: number, req: Rq, res: Rs, next: () => void) {
 		if (n >= total) {
 			return next();
 		}
@@ -89,7 +100,7 @@ export function compose_handlers(ignore: IgnoreValue, handlers: Handler[]): Hand
 		};
 }
 
-export function should_ignore(uri: string, val: IgnoreValue) {
+export function should_ignore(uri: string, val: IgnoreValue): boolean {
 	if (Array.isArray(val)) return val.some(x => should_ignore(uri, x));
 	if (val instanceof RegExp) return val.test(uri);
 	if (typeof val === 'function') return val(uri);
@@ -103,7 +114,7 @@ export function serve({ prefix, pathname, cache_control }: {
 }) {
 	const filter = pathname
 		? (req: Req) => req.path === pathname
-		: (req: Req) => req.path.startsWith(prefix);
+		: (req: Req) => req.path.startsWith(prefix || '');
 
 	const cache: Map<string, Buffer> = new Map();
 
@@ -119,7 +130,9 @@ export function serve({ prefix, pathname, cache_control }: {
 				const file = path.posix.normalize(decodeURIComponent(req.path));
 				const data = read(file);
 
-				res.setHeader('Content-Type', type);
+				if (type) {
+					res.setHeader('Content-Type', type);
+				}
 				res.setHeader('Cache-Control', cache_control);
 				res.end(data);
 			} catch (err) {
@@ -132,4 +145,9 @@ export function serve({ prefix, pathname, cache_control }: {
 	};
 }
 
-function noop(){}
+const noopSession: SessionSeed<any, any> = (...o: any[]) => ({})
+
+const noopContext: BaseContextSeed<any, any> = (...o: any[]) => ({
+	fetch: nodeFetch,
+	preload: (ctx, fn, page, session) => fn.call(ctx, page, session),
+})

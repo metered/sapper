@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import svelte from 'svelte/compiler';
-import { Page, PageComponent, ServerRoute, ManifestData } from '../interfaces';
+import { compile as svelte_compile } from 'svelte/compiler';
+import { ManfiestDataPage, ManfiestDataPagePart, DefaultPageComponent, PageComponent, ServerRoute, ManifestData, UserPageComponent } from '../interfaces';
 import { posixify, reserved_words } from '../utils';
 
 export default function create_manifest_data(cwd: string, extensions: string = '.svelte .html'): ManifestData {
@@ -18,7 +18,7 @@ export default function create_manifest_data(cwd: string, extensions: string = '
 
 		if (/preload/.test(source)) {
 			try {
-				const { vars } = svelte.compile(source.replace(/<style\b[^>]*>[^]*?<\/style>/g, ''), { generate: false });
+				const { vars } = svelte_compile(source.replace(/<style\b[^>]*>[^]*?<\/style>/g, ''), { generate: false });
 				return vars.some((variable: any) => variable.module && variable.export_name === 'preload');
 			} catch (err) {}
 		}
@@ -39,23 +39,21 @@ export default function create_manifest_data(cwd: string, extensions: string = '
 			: null;
 	}
 
-	const components: PageComponent[] = [];
-	const pages: Page[] = [];
+	const components: UserPageComponent[] = [];
+	const pages: ManfiestDataPage[] = [];
 	const server_routes: ServerRoute[] = [];
 
-	const default_layout: PageComponent = {
+	const default_layout: DefaultPageComponent = {
 		default: true,
 		type: 'layout',
 		name: '_default_layout',
-		file: null,
 		has_preload: false
 	};
 
-	const default_error: PageComponent = {
+	const default_error: DefaultPageComponent = {
 		default: true,
 		type: 'error',
 		name: '_default_error',
-		file: null,
 		has_preload: false
 	};
 
@@ -63,12 +61,19 @@ export default function create_manifest_data(cwd: string, extensions: string = '
 		dir: string,
 		parent_segments: Part[][],
 		parent_params: string[],
-		stack: Array<{
-			component: PageComponent,
-			params: string[]
-		}>
+		stack: Array<ManfiestDataPagePart | null>,
 	) {
-		const items = fs.readdirSync(dir)
+		type Item = {
+			basename: string
+			ext: string
+			parts: Part[]
+			file: string
+			is_dir: boolean
+			is_index: boolean
+			is_page: boolean
+			route_suffix: string
+		}
+		const items: Item[] = (fs.readdirSync(dir)
 			.map(basename => {
 				const resolved = path.join(dir, basename);
 				const file = path.relative(cwd, resolved);
@@ -110,7 +115,7 @@ export default function create_manifest_data(cwd: string, extensions: string = '
 					route_suffix
 				};
 			})
-			.filter(Boolean)
+			.filter(Boolean) as Item[])
 			.sort(comparator);
 
 		items.forEach(item => {
@@ -167,9 +172,9 @@ export default function create_manifest_data(cwd: string, extensions: string = '
 
 				components.push(component);
 
-				const parts = (item.is_index && stack[stack.length - 1] === null)
+				const parts: ManfiestDataPagePart[] = ((item.is_index && stack[stack.length - 1] === null)
 					? stack.slice(0, -1).concat({ component, params })
-					: stack.concat({ component, params })
+					: stack.concat({ component, params })) as ManfiestDataPagePart[]
 
 				pages.push({
 					pattern: get_pattern(segments, true),
@@ -194,13 +199,24 @@ export default function create_manifest_data(cwd: string, extensions: string = '
 	walk(cwd, [], [], []);
 
 	// check for clashes
-	const seen_pages: Map<string, Page> = new Map();
+	const seen_pages: Map<string, ManfiestDataPage> = new Map();
 	pages.forEach(page => {
 		const pattern = page.pattern.toString();
 		if (seen_pages.has(pattern)) {
-			const file = page.parts.pop().component.file;
+			const part = page.parts.pop()
+			if (!part) {
+				throw new Error(`Internal error: ran out of page parts. Page pattern is: ${page.pattern}`)
+			}
+			const file = part.component.file;
 			const other_page = seen_pages.get(pattern);
-			const other_file = other_page.parts.pop().component.file;
+			if (!other_page) {
+				throw new Error(`Internal ereror: nothing in seen_pages for ${pattern}. Have: ${Array.from(seen_pages.keys())}`)
+			}
+			const other_part = other_page.parts.pop()
+			if (!other_part) {
+				throw new Error(`Internal error: ran out of other page parts. Other page pattern is: ${other_page.pattern}`)
+			}
+			const other_file = other_part.component.file;
 
 			throw new Error(`The ${other_file} and ${file} pages clash`);
 		}
@@ -213,7 +229,7 @@ export default function create_manifest_data(cwd: string, extensions: string = '
 		const pattern = route.pattern.toString();
 		if (seen_routes.has(pattern)) {
 			const other_route = seen_routes.get(pattern);
-			throw new Error(`The ${other_route.file} and ${route.file} routes clash`);
+			throw new Error(`The ${other_route?.file} and ${route.file} routes clash`);
 		}
 
 		seen_routes.set(pattern, route);
@@ -295,6 +311,9 @@ function comparator(
 			}
 		}
 	}
+
+	// fallback to have longer option win... but what about a tie?
+	return (a.parts.length < b.parts.length) ? 1 : -1
 }
 
 function get_parts(part: string): Part[] {
@@ -304,7 +323,7 @@ function get_parts(part: string): Part[] {
 			const dynamic = i % 2 === 1;
 
 			const [, content, qualifier] = dynamic
-				? /([^(]+)(\(.+\))?$/.exec(str)
+				? /([^(]+)(\(.+\))?$/.exec(str) as unknown as [never, string, string | null]
 				: [, str, null];
 
 			return {
@@ -314,7 +333,7 @@ function get_parts(part: string): Part[] {
 				qualifier
 			};
 		})
-		.filter(Boolean);
+		.filter(Boolean) as Part[];
 }
 
 function get_slug(file: string) {

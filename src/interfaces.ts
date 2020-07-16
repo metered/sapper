@@ -16,7 +16,7 @@ export type Route = {
 
 export type Template = {
 	render: (data: Record<string, string>) => string;
-	stream: (req, res, data: Record<string, string | Promise<string>>) => void;
+	stream: (req: unknown, res: unknown, data: Record<string, string | Promise<string>>) => void;
 };
 
 export type WritableStore<T> = {
@@ -26,19 +26,33 @@ export type WritableStore<T> = {
 };
 
 export type PageComponent = {
-	default?: boolean;
-	type?: string;
+	default?: undefined | true;
+	type?: undefined | string;
+	file?: undefined | string
 	name: string;
-	file: string;
 	has_preload: boolean;
+}
+
+export type DefaultPageComponent = PageComponent & {
+	default?: true;
+	type: string;
+	file?: undefined;
 };
 
-export type Page = {
+export type UserPageComponent = PageComponent & {
+	default?: undefined;
+	type?: undefined;
+	file: string;
+};
+
+export type ManfiestDataPagePart = {
+	component: UserPageComponent;
+	params: string[];
+}
+
+export type ManfiestDataPage = {
 	pattern: RegExp;
-	parts: Array<{
-		component: PageComponent;
-		params: string[];
-	}>
+	parts: ManfiestDataPagePart[]
 };
 
 export type ServerRoute = {
@@ -57,8 +71,8 @@ export type Dirs = {
 export type ManifestData = {
 	root: PageComponent;
 	error: PageComponent;
-	components: PageComponent[];
-	pages: Page[];
+	components: UserPageComponent[];
+	pages: ManfiestDataPage[];
 	server_routes: ServerRoute[];
 };
 
@@ -69,11 +83,19 @@ export type ReadyEvent = {
 
 export type ErrorEvent = {
 	type: string;
-	error: Error;
+	error: Error & {
+		frame?: unknown;
+		loc?: {
+			file?: string;
+			line: number;
+			column: number;
+		};
+	};
 };
 
 export type FatalEvent = {
 	message: string;
+	log?: unknown;
 };
 
 export type InvalidEvent = {
