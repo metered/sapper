@@ -153,9 +153,7 @@ function generate_client_manifest(
 		export const routes = ${routes};
 
 		${dev ? `if (typeof window !== 'undefined') {
-			import(${stringify(posixify(path.resolve(__dirname, '../sapper-dev-client.js')))}).then(client => {
-				client.connect(${dev_port});
-			});
+			(${fs.readFileSync(path.resolve(__dirname, "../../sapper-dev-client.js"))})(${dev_port});
 		}` : ''}
 	`.replace(/^\t{2}/gm, '').trim();
 }

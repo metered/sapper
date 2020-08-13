@@ -2,11 +2,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import sade from 'sade';
 import colors from 'kleur';
-import * as pkg from '../package.json';
 import { elapsed, repeat, left_pad, format_milliseconds } from './utils';
 import { InvalidEvent, ErrorEvent, FatalEvent, BuildEvent, ReadyEvent } from './interfaces';
 
-const prog = sade('sapper').version(pkg.version);
+const prog = sade('sapper').version("(from source)");
 
 if (process.argv[2] === 'start') {
 	// remove this in a future version

@@ -4,6 +4,7 @@ import mime from 'mime/lite';
 import { build_dir, dev, manifest, Handler, Req, Res, ErrorHandler, BaseContextSeed, SessionSeed } from '@sapper/internal/manifest-server';
 import { get_server_route_handler } from './get_server_route_handler';
 import { get_page_handler } from './get_page_handler';
+import { get_dev_handler } from './get_dev_handler';
 import nodeFetch from 'node-fetch';
 
 type IgnoreValue = Array<IgnoreValue> | RegExp | ((uri: string) => boolean) | string;
@@ -49,6 +50,8 @@ export default function middleware<Rq extends Req, Rs extends Res>(opts: Middlew
 
 			next();
 		},
+
+		dev && get_dev_handler(),
 
 		fs.existsSync(path.join(build_dir, 'service-worker.js')) && serve({
 			pathname: '/service-worker.js',

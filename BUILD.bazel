@@ -1,0 +1,249 @@
+load("@npm//@bazel/rollup:index.bzl", "rollup_bundle")
+load("@npm//@bazel/typescript:index.bzl", "ts_library")
+load("@build_bazel_rules_nodejs//:index.bzl", "nodejs_binary")
+
+ts_library(
+  name = "runtime/internal",
+  tsconfig = "tsconfig.json",
+  module_name = "@sapper/internal",
+  module_root = "runtime/src/internal",
+  generate_externs = False,
+  srcs = [
+    "runtime/src/internal/App.svelte.d.ts",
+    "runtime/src/internal/shared.d.ts",
+    "runtime/src/internal/manifest-server.d.ts",
+    "runtime/src/internal/manifest-client.d.ts",
+  ]
+)
+
+ts_library(
+  name = "runtime/server_lib",
+  module_name = "@sapper/server",
+  module_root = "runtime/src/server",
+  tsconfig = "tsconfig.json",
+  generate_externs = False,
+
+  deps = [
+    "@npm//@types/node",
+    "@npm//@types/cookie",
+    "@npm//svelte",
+    "@npm//devalue",
+    "@npm//@types/node-fetch",
+    "@npm//node-fetch",
+    "@npm//mime",
+    "@npm//cookie",
+    "@npm//tslib",
+
+    ":runtime/internal",
+  ],
+
+  srcs = glob([
+    "runtime/src/server/**/*.ts",
+  ]),
+)
+
+rollup_bundle(
+  name = "runtime/server.mjs",
+  entry_point = "runtime/src/server/index.ts",
+  config_file = "runtime/src/server/rollup.config.js",
+  format = "esm",
+  deps = [
+    ":runtime/server_lib",
+    "@npm//rollup-plugin-node-resolve",
+    "@npm//rollup-plugin-commonjs",
+    "@npm//rollup-plugin-sucrase",
+  ],
+)
+
+ts_library(
+  name = "runtime/app_lib",
+  tsconfig = "tsconfig.json",
+  module_name = "@sapper/app",
+  module_root = "runtime/src/app",
+  generate_externs = False,
+
+  deps = [
+    "@npm//svelte",
+    "@npm//tslib",
+
+    ":runtime/internal"
+  ],
+
+  srcs = glob([
+    "runtime/src/app/**/*.ts",
+  ]),
+)
+
+rollup_bundle(
+  name = "runtime/app.mjs",
+  entry_point = "runtime/src/app/index.ts",
+  config_file = "runtime/src/app/rollup.config.js",
+  format = "esm",
+  deps = [
+    ":runtime/app_lib",
+    "@npm//rollup-plugin-node-resolve",
+    "@npm//rollup-plugin-commonjs",
+    "@npm//rollup-plugin-sucrase",
+  ],
+)
+
+filegroup(
+  name = "runtime_bundles",
+  srcs = [
+    ":runtime/app.mjs",
+    ":runtime/server.mjs",
+  ] + glob([
+    "runtime/internal/**/*",
+  ]),
+)
+
+ts_library(
+  name = "runtime",
+  srcs = [
+    ":runtime_types",
+  ],
+  visibility = ["//visibility:public"],
+)
+
+filegroup(
+  name = "runtime_types",
+  srcs = [
+    ":runtime/server_lib",
+    ":runtime/app_lib",
+    ":runtime/internal",
+  ]
+)
+
+ts_library(
+  name = "interfaces",
+  tsconfig = "tsconfig.json",
+  generate_externs = False,
+
+  deps = [
+    "@npm//@types/node",
+    "@npm//tslib",
+  ],
+
+  srcs = glob([
+    "src/core/create_compilers/interfaces.ts",
+    "src/interfaces.ts",
+    "src/utils.ts",
+  ]),
+)
+
+ts_library(
+  name = "core",
+  tsconfig = "tsconfig.json",
+  generate_externs = False,
+
+  deps = [
+    ":interfaces",
+    ":config",
+    "@npm//@types/node",
+    "@npm//@types/require-relative",
+    "@npm//@types/string-hash",
+    "@npm//@types/webpack",
+    "@npm//webpack",
+    "@npm//string-hash",
+    "@npm//sourcemap-codec",
+    "@npm//kleur",
+    "@npm//pretty-bytes",
+    "@npm//rollup",
+    "@npm//require-relative",
+    "@npm//webpack-format-messages",
+    "@npm//svelte",
+  ],
+
+  data = [
+    "sapper-dev-client.js",
+  ],
+
+  srcs = glob([
+    "types/webpack-format-messages/*.ts",
+    "src/core.ts",
+    "src/core/**/*.ts",
+  ], exclude=[
+    "src/core/create_compilers/interfaces.ts",
+  ]),
+)
+
+ts_library(
+  name = "api",
+  tsconfig = "tsconfig.nostrict.json",
+  generate_externs = False,
+
+  data = [
+    "runtime_bundles",
+  ],
+
+  deps = [
+    ":interfaces",
+    ":core",
+    ":config",
+    "@npm//@types/node",
+    "@npm//@types/node-fetch",
+    "@npm//@types/html-minifier",
+    "@npm//@types/http-link-header",
+    "@npm//node-fetch",
+    "@npm//html-minifier",
+    "@npm//http-link-header",
+    "@npm//cheap-watch",
+    "@npm//port-authority",
+    "@npm//shimport",
+  ],
+
+  srcs = glob([
+    "src/api/**/*.ts",
+    "src/api.ts",
+  ]),
+)
+
+ts_library(
+  name = "cli",
+  tsconfig = "tsconfig.json",
+  generate_externs = False,
+
+  deps = [
+    ":api",
+    ":interfaces",
+    "@npm//@types/node",
+    "@npm//@types/sade",
+    "@npm//kleur",
+    "@npm//sade",
+  ],
+
+  srcs = [
+    "src/cli.ts",
+  ],
+
+  visibility = ["//visibility:public"],
+)
+
+exports_files(["src/cli.ts"])
+
+ts_library(
+  name = "config",
+  tsconfig = "tsconfig.json",
+  generate_externs = False,
+  deps = [
+    "@npm//@types/node",
+    "@npm//rollup",
+  ],
+  srcs = glob([
+    "src/config/*.ts"
+  ]),
+
+  visibility = ["//visibility:public"],
+)
+
+nodejs_binary(
+  name = "sapper",
+  entry_point = ":src/cli.ts",
+  data = [
+    ":cli",
+    ":config",
+
+    # "package.json",
+  ],
+  visibility = ["//visibility:public"],
+)
