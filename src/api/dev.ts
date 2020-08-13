@@ -160,6 +160,9 @@ class Watcher extends EventEmitter {
 		// Chrome looks for debugging targets on ports 9222 and 9229 by default
 		if (!this.devtools_port) this.devtools_port = await ports.find(9222);
 
+		// TODO watch the configs themselves?
+		const compilers: Compilers = await create_compilers(this.bundler, cwd, src, dest, true);
+
 		let manifest_data: ManifestData;
 
 		try {
@@ -167,6 +170,7 @@ class Watcher extends EventEmitter {
 			create_app({
 				bundler: this.bundler,
 				manifest_data,
+				has_service_worker: !!compilers.serviceworker,
 				dev: true,
 				dev_port: this.dev_port,
 				cwd, src, routes, output
@@ -197,6 +201,7 @@ class Watcher extends EventEmitter {
 							manifest_data,
 							dev: true,
 							dev_port: this.dev_port,
+							has_service_worker: !!compilers.serviceworker,
 							cwd, src, routes, output
 						});
 					} catch (error) {
@@ -220,9 +225,6 @@ class Watcher extends EventEmitter {
 		}
 
 		let deferred = new Deferred();
-
-		// TODO watch the configs themselves?
-		const compilers: Compilers = await create_compilers(this.bundler, cwd, src, dest, true);
 
 		const emitFatal = () => {
 			this.emit('fatal', <FatalEvent>{

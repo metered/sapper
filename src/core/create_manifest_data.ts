@@ -4,7 +4,7 @@ import { compile as svelte_compile } from 'svelte/compiler';
 import { ManfiestDataPage, ManfiestDataPagePart, DefaultPageComponent, PageComponent, ServerRoute, ManifestData, UserPageComponent } from '../interfaces';
 import { posixify, reserved_words } from '../utils';
 
-export default function create_manifest_data(cwd: string, extensions: string = '.svelte .html'): ManifestData {
+export default function create_manifest_data(cwd: string, routes_alias: string, extensions: string = '.svelte .html'): ManifestData {
 
 	const component_extensions = extensions.split(' ');
 
@@ -236,6 +236,7 @@ export default function create_manifest_data(cwd: string, extensions: string = '
 	});
 
 	return {
+		routes_alias,
 		root,
 		error,
 		components,

@@ -1,6 +1,4 @@
 import { writable } from 'svelte/store';
-import fs from 'fs';
-import path from 'path';
 import cookie from 'cookie';
 import devalue from 'devalue';
 import URL from 'url';
@@ -9,22 +7,13 @@ import { has_service_worker, dev, read_template, Manifest, ManifestPage, Req, Re
 import App, { SSRAppPropsRender } from '@sapper/internal/App.svelte';
 import { Headers as FetchHeaders } from 'node-fetch'
 
+type LinkPreloadAs = 'audio' | 'document' | 'embed' | 'fetch' | 'font' | 'image' | 'object' | 'script' | 'style' | 'track' | 'video' | 'worker'
 
 export function get_page_handler<Rq extends Req, Rs extends Res>(
 	manifest: Manifest,
 	session_getter: (req: Rq, res: Rs) => Session | Promise<Session>,
 	base_context_getter: BaseContextSeed<Rq, Rs>,
 ) {
-	const get_build_info = dev
-		? () => JSON.parse(fs.readFileSync(path.join(build_dir, 'build.json'), 'utf-8'))
-		: (assets => () => assets)(JSON.parse(fs.readFileSync(path.join(build_dir, 'build.json'), 'utf-8')));
-
-	const template = dev
-		? () => read_template(src_dir)
-		: (str => () => str)(read_template(build_dir));
-
-	const has_service_worker = fs.existsSync(path.join(build_dir, 'service-worker.js'));
-
 	const { pages } = manifest;
 	const error_route = manifest.error;
 
@@ -40,6 +29,7 @@ export function get_page_handler<Rq extends Req, Rs extends Res>(
 	function handle_error(req: Rq, res: Rs, statusCode: number, error: Error) {
 		handle_page({
 			pattern: null,
+			resources: [],
 			parts: [
 				{ name: null, component: error_route }
 			]
@@ -48,50 +38,50 @@ export function get_page_handler<Rq extends Req, Rs extends Res>(
 
 	async function handle_page(page: ManifestPage, req: Rq, res: Rs, status = 200, error: Error | null = null) {
 		const is_service_worker_index = req.path === '/service-worker-index.html';
-		const build_info: {
-			bundler: 'rollup' | 'webpack',
-			shimport: string | null,
-			assets: Record<string, string | string[]>,
-			css: {
-				main?: string,
-				chunks: Record<string, string[]>
-			},
-			legacy_assets?: Record<string, string>
-		 } = get_build_info();
 
 		res.setHeader('Content-Type', 'text/html');
 		res.setHeader('Cache-Control', dev ? 'no-cache' : 'max-age=600');
 
-		// preload main.js and current route
-		// TODO detect other stuff we can preload? images, CSS, fonts?
-		let preloaded_chunks = Array.isArray(build_info.assets.main) ? build_info.assets.main : [build_info.assets.main];
+		// TODO detect other stuff we can preload? images, fonts?
+		let preloaded_resources = Array.from(manifest.main_resources);
+
 		if (!error && !is_service_worker_index) {
 			page.parts.forEach(part => {
 				if (!part) return;
 				if (!part.name) return;
 
-				// using concat because it could be a string or an array. thanks webpack!
-				preloaded_chunks = preloaded_chunks.concat(build_info.assets[part.name]);
+				for (const resource of page.resources) {
+					preloaded_resources.push(resource)
+				}
 			});
 		}
 
-		if (build_info.bundler === 'rollup') {
-			// TODO add dependencies and CSS
-			const link = preloaded_chunks
-				.filter(file => file && !file.match(/\.map$/))
-				.map(file => `<${req.baseUrl}/client/${file}>;rel="modulepreload"`)
-				.join(', ');
+		// TODO only set to true for chromium browsers, based on:
+		// - https://caniuse.com/#feat=link-rel-modulepreload
+		// - https://groups.google.com/a/chromium.org/g/blink-dev/c/ynkrM70KDD4?pli=1
+		// - https://www.chromestatus.com/feature/5762805915451392
+		const use_modulepreload = /Chrome/.test(req.headers["user-agent"] || '')
 
-			res.setHeader('Link', link);
-		} else {
-			const link = preloaded_chunks
-				.filter(file => file && !file.match(/\.map$/))
-				.map((file) => {
-					const as = /\.css$/.test(file) ? 'style' : 'script';
-					return `<${req.baseUrl}/client/${file}>;rel="preload";as="${as}"`;
-				})
-				.join(', ');
+		const link = preloaded_resources
+			.map(resource => {
+				const href = `${req.baseUrl}/client/${resource.file}`;
 
+				if (resource.type === 'module') {
+					return use_modulepreload ?
+							`<${href}>; rel=modulepreload` :
+							`<${href}>; rel=preload; as=script; crossorigin`;
+				}
+
+				const rel = 'preload'
+
+				// values for as set by https://developer.mozilla.org/en-US/docs/Web/HTML/Element/link
+				const as: LinkPreloadAs = resource.type
+
+				return `<${href}>; rel=${rel}; as=${as}`;
+			}).filter(Boolean)
+			.join(', ');
+
+		if (link) {
 			res.setHeader('Link', link);
 		}
 
@@ -310,41 +300,31 @@ export function get_page_handler<Rq extends Req, Rs extends Res>(
 				script += `if('serviceWorker' in navigator)navigator.serviceWorker.register('${req.baseUrl}/service-worker.js');`;
 			}
 
-			const file = new Array<string>().concat(build_info.assets.main).filter(file => file && /\.js$/.test(file))[0];
-			const main = `${req.baseUrl}/client/${file}`;
+			// Under what circumstances should we just inline the needed JavaScript and CSS?
 
-			if (build_info.bundler === 'rollup') {
-				if (build_info.legacy_assets) {
-					const legacy_main = `${req.baseUrl}/client/legacy/${build_info.legacy_assets.main}`;
-					script += `(function(){try{eval("async function x(){}");var main="${main}"}catch(e){main="${legacy_main}"};var s=document.createElement("script");try{new Function("if(0)import('')")();s.src=main;s.type="module";s.crossOrigin="use-credentials";}catch(e){s.src="${req.baseUrl}/client/shimport@${build_info.shimport}.js";s.setAttribute("data-main",main);}document.head.appendChild(s);}());`;
+			const main_js = manifest.main_resources.find(({type}) => type === 'script' || type === 'module')
+			if (!main_js) {
+				throw new Error("Internal error: missing main script resource")
+			}
+			const main_src = `${req.baseUrl}/client/${main_js.file}`;
+
+			if (manifest.shimport_version) {
+				if (manifest.main_legacy_resources) {
+					// main_legacy_resources ... what about css? need to filter this down to js...
+					const legacy_main = `${req.baseUrl}/client/legacy/${manifest.main_legacy_resources.filter(({type}) => type === 'script')}`;
+					script += `(function(){try{eval("async function x(){}");var main="${main_src}"}catch(e){main="${legacy_main}"};var s=document.createElement("script");try{new Function("if(0)import('')")();s.src=main;s.type="module";s.crossOrigin="use-credentials";}catch(e){s.src="${req.baseUrl}/client/shimport@${manifest.shimport_version}.js";s.setAttribute("data-main",main);}document.head.appendChild(s);}());`;
 				} else {
-					script += `var s=document.createElement("script");try{new Function("if(0)import('')")();s.src="${main}";s.type="module";s.crossOrigin="use-credentials";}catch(e){s.src="${req.baseUrl}/client/shimport@${build_info.shimport}.js";s.setAttribute("data-main","${main}")}document.head.appendChild(s)`;
+					script += `var s=document.createElement("script");try{new Function("if(0)import('')")();s.src="${main_src}";s.type="module";s.crossOrigin="use-credentials";}catch(e){s.src="${req.baseUrl}/client/shimport@${manifest.shimport_version}.js";s.setAttribute("data-main","${main_src}")}document.head.appendChild(s)`;
 				}
 			} else {
-				script += `</script><script src="${main}">`;
+				script += `</script><script src="${main_src}">`;
 			}
 
 			let styles: string;
 
-			// TODO make this consistent across apps
-			// TODO embed build_info in placeholder.ts
-			if (build_info.css && build_info.css.main) {
-				const css_chunks = new Set<string>();
-				if (build_info.css.main) css_chunks.add(build_info.css.main);
-				page.parts.forEach(part => {
-					if (!part) return;
-					if (!part.file) return;
-					const css_chunks_for_part = build_info.css.chunks[part.file];
-
-					if (css_chunks_for_part) {
-						css_chunks_for_part.forEach(file => {
-							css_chunks.add(file);
-						});
-					}
-				});
-
-				styles = Array.from(css_chunks)
-					.map(href => `<link rel="stylesheet" href="client/${href}">`)
+			if (preloaded_resources.length) {
+				styles = preloaded_resources.filter(({type}) => type === 'style')
+					.map(({ file }) => `<link rel="stylesheet" href="client/${file}">`)
 					.join('')
 			} else {
 				styles = (css && css.code ? `<style>${css.code}</style>` : '');
@@ -353,7 +333,7 @@ export function get_page_handler<Rq extends Req, Rs extends Res>(
 			// users can set a CSP nonce using res.locals.nonce
 			const nonce_attr = (res.locals && res.locals.nonce) ? ` nonce="${res.locals.nonce}"` : '';
 
-			const body = template()
+			const body = read_template()
 				.replace('%sapper.base%', () => `<base href="${req.baseUrl}/">`)
 				.replace('%sapper.scripts%', () => `<script${nonce_attr}>${script}</script>`)
 				.replace('%sapper.html%', () => html)
@@ -389,10 +369,6 @@ export function get_page_handler<Rq extends Req, Rs extends Res>(
 
 		handle_error(req, res, 404, new Error('Not found'));
 	};
-}
-
-function read_template(dir = build_dir) {
-	return fs.readFileSync(`${dir}/template.html`, 'utf-8');
 }
 
 function try_serialize(data: any, fail?: (err: Error) => void) {

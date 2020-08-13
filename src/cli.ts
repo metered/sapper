@@ -145,6 +145,47 @@ prog.command('dev')
 		}
 	});
 
+prog.command('codegen [dest]')
+	.describe('Generate sapper-specific code')
+	.option('--bundler', 'Specify a bundler (rollup or webpack, blank for auto)')
+	.option('--cwd', 'Current working directory', '.')
+	.option('--src', 'Source directory', 'src')
+	.option('--routes', 'Routes directory', 'src/routes')
+	.option('--routes_alias', 'Routes alias to use at run/bundle-time')
+	.option('--static', 'Static files directory', 'static')
+	.option('--dev', 'Enable /__sapper__ route to refresh clients on change')
+	.option('--ext', 'Custom page route extensions (space separated)', '.svelte .html')
+	.action(async (output = 'src/node_modules/@sapper', opts: {
+		bundler: 'webpack' | 'rollup' | undefined
+		cwd: string
+		src: string
+		routes: string
+		routes_alias: string
+		static: string
+		dev: boolean
+		ext: string
+	}) => {
+		try {
+			const { codegen: _codegen } = await import('./api/codegen');
+
+			await _codegen({
+				cwd: opts.cwd,
+				bundler: opts.bundler,
+				dev: opts.dev,
+				ext: opts.ext,
+				output: output,
+				routes: opts.routes,
+				routes_alias: opts.routes_alias,
+				src: opts.src,
+			});
+
+			// console.error(`\n> Finished in ${elapsed(start)}. Type ${colors.bold().cyan(`npx serve ${dest}`)} to run the app.`);
+		} catch (err) {
+			console.error(colors.bold().red(`> ${err.message}`));
+			process.exit(1);
+		}
+	});
+
 prog.command('build [dest]')
 	.describe('Create a production-ready version of your app')
 	.option('-p, --port', 'Default of process.env.PORT', '3000')

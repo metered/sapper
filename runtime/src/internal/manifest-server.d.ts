@@ -33,10 +33,14 @@ type Preload<Props> = _Preload<PreloadContextFetch, Props>
 export type BaseContextSeed<Req, Res> = (req: Req, res: Res) => BaseContext<Fetch>
 export type SessionSeed<Req, Res> = (req: Req, res: Res) => Session | Promise<Session>
 
-export const src_dir: string
+export function read_template(): string
+
 export const build_dir: string
+export function set_build_dir(s: string): void
+
 export const dev: boolean
 export const manifest: Manifest
+export const has_service_worker: boolean
 
 import { IncomingMessage, ServerResponse } from 'http';
 
@@ -60,14 +64,25 @@ export type ManifestPagePart<Props> = {
   preload?: Preload<Props>;
 }
 
+export interface ManifestResource {
+  type: 'style' | 'script' | 'module'
+  file: string
+}
+
 export type ManifestPage = {
   pattern: RegExp | null;
+  resources: ManifestResource[]; // list of assets needed for transitive dependencies
   parts: ManifestPagePart<unknown>[];
 };
 
 export type Manifest = {
   server_routes: ServerRoute[];
   pages: ManifestPage[];
+
+  shimport_version: string | null;
+  main_resources: ManifestResource[]; // list of resoruces needed for main
+  main_legacy_resources?: ManifestResource[]; // list of resoruces needed for main in legacy browsers
+
   root: SSRComponent<unknown>;
   root_preload?: Preload<unknown>;
   error: SSRComponent<ErrorProps>;

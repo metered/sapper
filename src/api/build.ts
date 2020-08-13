@@ -49,6 +49,8 @@ export async function build({
 		throw new Error(`Legacy builds are not supported for projects using webpack`);
 	}
 
+	const { client, server, serviceworker } = await create_compilers(bundler, cwd, src, dest, false);
+
 	rimraf(output);
 	mkdirp(output);
 	copy_runtime(output);
@@ -62,7 +64,7 @@ export async function build({
 	const template = read_template(src);
 	fs.writeFileSync(`${dest}/template.html`, minify_html(template));
 
-	const manifest_data = create_manifest_data(routes, ext);
+	const manifest_data = create_manifest_data(routes, routes, ext);
 
 	// create src/node_modules/@sapper/app.mjs and server.mjs
 	create_app({
@@ -72,10 +74,9 @@ export async function build({
 		src,
 		routes,
 		output,
-		dev: false
+		dev: false,
+		has_service_worker: !!serviceworker,
 	});
-
-	const { client, server, serviceworker } = await create_compilers(bundler, cwd, src, dest, false);
 
 	const client_result = await client.compile();
 	oncompile({

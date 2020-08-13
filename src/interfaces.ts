@@ -69,6 +69,7 @@ export type Dirs = {
 };
 
 export type ManifestData = {
+	routes_alias: string;
 	root: PageComponent;
 	error: PageComponent;
 	components: UserPageComponent[];
