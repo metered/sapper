@@ -192,7 +192,7 @@ export function select_target(url: URL): Target | null {
 	return null
 }
 
-export function handle_error(url: URL, status: number, error: Error) {
+export async function handle_error(url: URL, status: number, error: Error) {
 	const { host, pathname, search } = url;
 
 	const props: BrowserAppPropsUpdate<ErrorProps> = {
@@ -207,7 +207,7 @@ export function handle_error(url: URL, status: number, error: Error) {
 		segments: pathname.split('/').filter(Boolean),
 	}
 	const query = extract_query(search);
-	render([], props, { host, path: pathname, query, params: {} });
+	await render([], props, { host, path: pathname, query, params: {} });
 }
 
 export function scroll_state() {
@@ -248,8 +248,12 @@ export async function navigate(target: Target, id: number | null, noscroll?: boo
 	if (redirect) {
 		await goto(redirect.location, { replaceState: true });
 	} else {
-		const { props, branch } = loaded_result
-		await render(branch, props, target.page);
+		const { props, branch, preload_error } = loaded_result
+		if (preload_error) {
+			await handle_error(new URL(target.href), preload_error.statusCode, preload_error.error)
+		} else {
+			await render(branch, props, target.page);
+		}
 	}
 	if (document.activeElement && (document.activeElement instanceof HTMLElement)) document.activeElement.blur();
 
