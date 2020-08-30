@@ -3,14 +3,14 @@ import cookie from 'cookie';
 import devalue from 'devalue';
 import URL from 'url';
 import { Session, Redirect, PreloadError, PreloadContext, CONTEXT_KEY } from '@sapper/internal/shared';
-import { has_service_worker, dev, read_template, Manifest, ManifestPage, Req, Res, SSRLevel, Fetch, FetchRequestInfo, FetchRequestInit, BaseContextSeed } from '@sapper/internal/manifest-server';
+import { has_service_worker, dev, read_template, ServerManifest, ServerPage, Req, Res, SSRLevel, Fetch, FetchRequestInfo, FetchRequestInit, BaseContextSeed } from '@sapper/internal/manifest-server';
 import App, { SSRAppPropsRender } from '@sapper/internal/App.svelte';
 import { Headers as FetchHeaders } from 'node-fetch'
 
 type LinkPreloadAs = 'audio' | 'document' | 'embed' | 'fetch' | 'font' | 'image' | 'object' | 'script' | 'style' | 'track' | 'video' | 'worker'
 
 export function get_page_handler<Rq extends Req, Rs extends Res>(
-	manifest: Manifest,
+	manifest: ServerManifest,
 	session_getter: (req: Rq, res: Rs) => Session | Promise<Session>,
 	base_context_getter: BaseContextSeed<Rq, Rs>,
 ) {
@@ -36,7 +36,7 @@ export function get_page_handler<Rq extends Req, Rs extends Res>(
 		}, req, res, statusCode, error || new Error('Unknown error in preload function'));
 	}
 
-	async function handle_page(page: ManifestPage, req: Rq, res: Rs, status = 200, error: Error | null = null) {
+	async function handle_page(page: ServerPage, req: Rq, res: Rs, status = 200, error: Error | null = null) {
 		const is_service_worker_index = req.path === '/service-worker-index.html';
 
 		res.setHeader('Content-Type', 'text/html');
@@ -112,13 +112,14 @@ export function get_page_handler<Rq extends Req, Rs extends Res>(
 					return base_context.fetch(url, init)
 				}
 
-				const parsed = new URL.URL(url, `http://127.0.0.1:${process.env.PORT}${req.baseUrl ? req.baseUrl + '/' :''}`);
+				const port = process.env.PORT || '0'
+				const parsed = new URL.URL(url, `http://127.0.0.1:${port}${req.baseUrl ? req.baseUrl + '/' :''}`);
 
 				init = Object.assign({}, init);
 
 				const include_credentials = (
 					init.credentials === 'include' ||
-					init.credentials !== 'omit' && parsed.origin === `http://127.0.0.1:${process.env.PORT}`
+					init.credentials !== 'omit' && parsed.origin === `http://127.0.0.1:${port}`
 				);
 
 				if (include_credentials) {
@@ -156,14 +157,13 @@ export function get_page_handler<Rq extends Req, Rs extends Res>(
 		let params = <Record<string, string> | undefined> undefined;
 
 		try {
-			const root_preloaded = manifest.root_preload
-				? base_context.preload(preload_context, manifest.root_preload, {
+			const root_preloaded = manifest.root.preload
+				? base_context.preload(preload_context, manifest.root.preload, {
 					host: req.headers.host,
 					path: req.path,
 					query: req.query,
 					params: {}
-				}, session)
-				: {};
+				}, session) : {};
 
 			match = (error || !page.pattern) ? null : page.pattern.exec(req.path);
 
@@ -175,8 +175,8 @@ export function get_page_handler<Rq extends Req, Rs extends Res>(
 					// the deepest level is used below, to initialise the store
 					params = part.params ? part.params(match) : {};
 
-					return part.preload
-						? base_context.preload(preload_context, part.preload, {
+					return part.component.preload
+						? base_context.preload(preload_context, part.component.preload, {
 							host: req.headers.host,
 							path: req.path,
 							query: req.query,
@@ -253,13 +253,13 @@ export function get_page_handler<Rq extends Req, Rs extends Res>(
 					props: preloaded[0]
 				},
 				level1: error ? {
-					component: manifest.error,
+					component: manifest.error.default,
 					props: {
 						error,
 						status
 					}
 				} : {
-					component: page.parts[0]?.component,
+					component: page.parts[0]?.component.default,
 					props: preloaded[1] || {},
 				}
 			};
@@ -271,7 +271,7 @@ export function get_page_handler<Rq extends Req, Rs extends Res>(
 					if (!part) continue;
 
 					const level: SSRLevel<unknown> = {
-						component: part.component,
+						component: part.component.default,
 						props: preloaded[i + 1] || {},
 						segment: segments[i]
 					};

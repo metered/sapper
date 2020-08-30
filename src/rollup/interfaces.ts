@@ -29,7 +29,6 @@ export type PageComponent = {
   type?: undefined | string;
   file?: undefined | string
   name: string;
-  has_preload: boolean;
 }
 
 export type UserPageComponent = PageComponent & {
@@ -40,7 +39,7 @@ export type UserPageComponent = PageComponent & {
 
 export type ManifestData = {
   routes_alias: string;
-  root: PageComponent;
+  root_comp: PageComponent;
   error: PageComponent;
   components: UserPageComponent[];
   pages: Page[];
@@ -49,7 +48,6 @@ export type ManifestData = {
 
 export interface PageResourceNode {
   type: PageResourceType;
-  transitive_deps: Iterable<this>;
   file_name: string;
 }
 
@@ -57,3 +55,14 @@ export interface CompileError {
   file: string;
   message: string;
 }
+
+export interface ClientResourceSet extends JsonMap {
+  routes: Record<string, PageResource[]>;
+  main: PageResource[];
+  main_legacy?: PageResource[];
+}
+
+type JsonPrimitive = string | number | boolean | null
+interface JsonMap extends Record<string, JsonPrimitive | JsonArray | JsonMap | undefined> { }
+interface JsonArray extends Array<JsonPrimitive | JsonArray | JsonMap> { }
+export type Json = JsonPrimitive | JsonMap | JsonArray

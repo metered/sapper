@@ -1,9 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { create_app, create_manifest_data } from '../core';
+import { create_app, create_manifest_data } from 'sapper/core';
 import validate_bundler from './utils/validate_bundler';
 import { copy_runtime } from './utils/copy_runtime';
 import { rimraf, mkdirp } from './utils/fs_utils';
+import { posixify } from '../utils';
 
 type Opts = {
   cwd?: string;
@@ -44,15 +45,18 @@ export async function codegen({
   const manifest_data_path = path.join(output, 'internal', 'manifest-data.json')
 
   const manifest_data = create_manifest_data(routes, routes_alias, ext);
-  fs.writeFileSync(manifest_data_path, JSON.stringify(manifest_data));
+  await fs.promises.writeFile(manifest_data_path, JSON.stringify(manifest_data));
+
+  // routes.startsWith('@') ? routes : path.relative(`${output}/internal`, routes)
+  const src_dir = posixify(path.normalize(path.relative(cwd, src)));
+  const template_path = `${src_dir}/template.html`
 
   // create src/node_modules/@sapper/app.mjs and server.mjs
   create_app({
     bundler,
     manifest_data,
-    cwd,
-    src,
-    routes: routes_alias,
+    template_path,
+    routes_alias,
     output,
     dev,
     has_service_worker,

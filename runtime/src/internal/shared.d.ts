@@ -68,15 +68,16 @@ export type Preload<Fetch, Props, S extends Session = Session> = (
   session: S,
 ) => Props | Promise<Props>
 
-export interface ComponentModule<Props = unknown> {
-  default: ComponentConstructor<Props>
+export interface DOMComponentModule<Fetch, Props = unknown> {
+  default: DOMComponentConstructor<Props>
+  preload?: Preload<Fetch, Props>
 }
 
-export interface ComponentConstructor<InitProps = unknown, SetProps = InitProps> {
-  new(options: { target: unknown, props: InitProps, hydrate: boolean }): Component<SetProps>;
+export interface DOMComponentConstructor<InitProps = unknown, SetProps = InitProps> {
+  new(options: { target: unknown, props: InitProps, hydrate: boolean }): DOMComponent<SetProps>;
 }
 
-export interface Component<Props> {
+export interface DOMComponent<Props> {
   $set: (data: Props) => void;
   $destroy: () => void;
 }
@@ -89,12 +90,17 @@ export interface SSRComponent<Props> {
   }
 }
 
-export interface Level1<Props = unknown> extends Level0<Props> {
-  component: ComponentConstructor<Props>;
+export interface SSRComponentModule<Fetch, Props> {
+  default: SSRComponent<Props>
+  preload?: Preload<Fetch, Props>
+}
+
+export interface DOMLevel1<Props = unknown> extends Level0<Props> {
+  component: DOMComponentConstructor<Props>;
   props: Props;
 }
 
-export interface Level<Props = unknown> extends Level1<Props> {
+export interface DOMLevel<Props = unknown> extends DOMLevel1<Props> {
   segment: string;
   match?: RegExpExecArray;
   part: number;

@@ -1,29 +1,15 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { compile as svelte_compile } from 'svelte/compiler';
-import { ManfiestDataPage, ManfiestDataPagePart, DefaultPageComponent, PageComponent, ServerRoute, ManifestData, UserPageComponent } from '../interfaces';
+import { ManfiestDataPage, ManfiestDataPagePart, DefaultPageComponent, PageComponent, ServerRoute, CodegenManifest, UserPageComponent } from '../interfaces';
 import { posixify, reserved_words } from '../utils';
 
-export default function create_manifest_data(cwd: string, routes_alias: string, extensions: string = '.svelte .html'): ManifestData {
+export default function create_manifest_data(cwd: string, routes_alias: string, extensions: string = '.svelte .html'): CodegenManifest {
 
 	const component_extensions = extensions.split(' ');
 
 	// TODO remove in a future version
 	if (!fs.existsSync(cwd)) {
 		throw new Error(`As of Sapper 0.21, the routes/ directory should become src/routes/`);
-	}
-
-	function has_preload(file: string) {
-		const source = fs.readFileSync(path.join(cwd, file), 'utf-8');
-
-		if (/preload/.test(source)) {
-			try {
-				const { vars } = svelte_compile(source.replace(/<style\b[^>]*>[^]*?<\/style>/g, ''), { generate: false });
-				return vars.some((variable: any) => variable.module && variable.export_name === 'preload');
-			} catch (err) {}
-		}
-
-		return false;
 	}
 
 	function find_layout(file_name: string, component_name: string, dir: string = '') {
@@ -34,7 +20,6 @@ export default function create_manifest_data(cwd: string, routes_alias: string, 
 			? {
 				name: component_name,
 				file: file,
-				has_preload: has_preload(file)
 			}
 			: null;
 	}
@@ -47,14 +32,12 @@ export default function create_manifest_data(cwd: string, routes_alias: string, 
 		default: true,
 		type: 'layout',
 		name: '_default_layout',
-		has_preload: false
 	};
 
 	const default_error: DefaultPageComponent = {
 		default: true,
 		type: 'error',
 		name: '_default_error',
-		has_preload: false
 	};
 
 	function walk(
@@ -167,7 +150,6 @@ export default function create_manifest_data(cwd: string, routes_alias: string, 
 				const component = {
 					name: get_slug(item.file),
 					file: item.file,
-					has_preload: has_preload(item.file)
 				};
 
 				components.push(component);

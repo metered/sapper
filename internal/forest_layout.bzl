@@ -1,6 +1,6 @@
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@build_bazel_rules_nodejs//:index.bzl", "nodejs_binary")
-load("@npm//@bazel/typescript:index.bzl", "ts_library")
+load("//tools/internal/typescript:index.bzl", "ts_library")
 
 load("@build_bazel_rules_svelte//:providers.bzl", "SvelteComponentInfo")
 load("@build_bazel_rules_nodejs//:providers.bzl", "JSEcmaScriptModuleInfo", "JSModuleInfo", "JSNamedModuleInfo", "NodeContextInfo", "NpmPackageInfo", "DeclarationInfo", "node_modules_aspect", "run_node", "js_ecma_script_module_info")
@@ -25,8 +25,8 @@ Returns a single ForestLayoutInfo.
     ]
 
     for dep in deps:
-        for providers in provider_tranches:
-            for provider in providers:
+        for provider_tranche in provider_tranches:
+            for provider in provider_tranche:
                 if provider in dep:
                     transitive_depsets.append(dep[provider].sources)
                     break
@@ -74,6 +74,22 @@ def _add_to_layout(ctx, layouts, strip_prefix_tranches, tree, files, exclude_suf
         # print("_add_to_layout", ctx.label, short_path, file)
 
 def _forest_layout_impl(ctx):
+    msg = "forest_layout\n"
+    msg += "  name: " + str(ctx.label) + "\n"
+    if ctx.attr.deps:
+        msg += "  deps: " + "\n"
+        for dep in ctx.attr.deps:
+            msg += "    " + str(dep.label) + "\n"
+    if ctx.attr.srcs:
+        msg += "  srcs:" + "\n"
+        for file in ctx.attr.srcs:
+            msg += "    " + str(file) + "\n"
+    if ctx.attr.mapped_srcs:
+        msg += "  mapped_srcs:" + "\n"
+        for prefix, file in ctx.attr.mapped_srcs.items():
+            msg += "    " + str(prefix) + ": " + str(file) + "\n"
+    # print(msg)
+
     layouts = {}
     prefixes = {
         ctx.attr.tree: ctx.attr.prefix,
@@ -110,7 +126,7 @@ def _forest_layout_impl(ctx):
                     layout[short_path] = file
                     # print("forest dep", ctx.label, short_path, file)
 
-    for target in ctx.attr.files:
+    for target in ctx.attr.srcs:
         _add_to_layout(ctx, 
             layouts = layouts,
             prefixes = prefixes,
@@ -123,7 +139,7 @@ def _forest_layout_impl(ctx):
             exclude_suffixes = ctx.attr.exclude_suffixes,
         )
 
-    for target, mapped_to in ctx.attr.mapped_files.items():
+    for target, mapped_to in ctx.attr.mapped_srcs.items():
         if mapped_to.endswith('/'):
             _add_to_layout(ctx, 
                 layouts = layouts,
@@ -150,7 +166,7 @@ def _forest_layout_impl(ctx):
     return [
         forest_layout_info(
             layouts = layouts,
-            deps = ctx.attr.deps + ctx.attr.mapped_files.keys() + ctx.attr.files,
+            deps = ctx.attr.deps + ctx.attr.mapped_srcs.keys() + ctx.attr.srcs,
         ),
     ]
     
@@ -168,11 +184,11 @@ forest_layout = rule(
         "tree": attr.string(
             default = "static",
         ),
-        "files": attr.label_list(
+        "srcs": attr.label_list(
             allow_files = True,
             aspects = [node_modules_aspect],
         ),
-        "mapped_files": attr.label_keyed_string_dict(
+        "mapped_srcs": attr.label_keyed_string_dict(
             allow_files = True,
             aspects = [node_modules_aspect],
         ),

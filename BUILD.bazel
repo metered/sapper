@@ -1,10 +1,10 @@
 load("@npm//@bazel/rollup:index.bzl", "rollup_bundle")
-load("@npm//@bazel/typescript:index.bzl", "ts_library")
-load("@build_bazel_rules_nodejs//:index.bzl", "nodejs_binary")
+load("//tools/internal/typescript:index.bzl", "ts_library")
+load("@build_bazel_rules_nodejs//:index.bzl", "nodejs_binary", "pkg_npm")
 
 ts_library(
   name = "runtime/internal",
-  tsconfig = "tsconfig.json",
+  tsconfig = ":tsconfig.build.json",
   module_name = "@sapper/internal",
   module_root = "runtime/src/internal",
   generate_externs = False,
@@ -19,8 +19,8 @@ ts_library(
 ts_library(
   name = "runtime/server_lib",
   module_name = "@sapper/server",
-  module_root = "runtime/src/server",
-  tsconfig = "tsconfig.json",
+  module_root = "runtime/src/server/index.d.ts",
+  tsconfig = ":tsconfig.build.json",
   generate_externs = False,
 
   deps = [
@@ -33,6 +33,7 @@ ts_library(
     "@npm//mime",
     "@npm//cookie",
     "@npm//tslib",
+    "@npm//sirv",
 
     ":runtime/internal",
   ],
@@ -57,16 +58,17 @@ rollup_bundle(
 
 ts_library(
   name = "runtime/app_lib",
-  tsconfig = "tsconfig.json",
+  tsconfig = ":tsconfig.build.json",
   module_name = "@sapper/app",
-  module_root = "runtime/src/app",
+  module_root = "runtime/src/app/index.d.ts",
   generate_externs = False,
 
   deps = [
     "@npm//svelte",
     "@npm//tslib",
 
-    ":runtime/internal"
+    ":runtime/internal",
+    ":utils_lib",
   ],
 
   srcs = glob([
@@ -99,6 +101,7 @@ filegroup(
 
 ts_library(
   name = "runtime",
+  generate_externs = False,
   srcs = [
     ":runtime_types",
   ],
@@ -115,8 +118,10 @@ filegroup(
 )
 
 ts_library(
-  name = "interfaces",
-  tsconfig = "tsconfig.json",
+  name = "interfaces_lib",
+  module_name = "sapper/interfaces",
+  module_root = "src/interfaces.d.ts",
+  tsconfig = ":tsconfig.build.json",
   generate_externs = False,
 
   deps = [
@@ -125,19 +130,39 @@ ts_library(
   ],
 
   srcs = glob([
-    "src/core/create_compilers/interfaces.ts",
     "src/interfaces.ts",
+  ]),
+)
+
+ts_library(
+  name = "utils_lib",
+  module_name = "sapper/utils",
+  module_root = "src/utils.d.ts",
+  tsconfig = ":tsconfig.build.json",
+  generate_externs = False,
+
+  deps = [
+    "@npm//@types/node",
+    "@npm//tslib",
+  ],
+
+  srcs = glob([
     "src/utils.ts",
   ]),
 )
 
 ts_library(
-  name = "core",
-  tsconfig = "tsconfig.json",
+  name = "core_lib",
+  module_name = 'sapper/core',
+  module_root = 'src/core.d.ts',
+
+  visibility = ["//visibility:public"],
+  tsconfig = ":tsconfig.build.json",
   generate_externs = False,
 
   deps = [
-    ":interfaces",
+    ":interfaces_lib",
+    ":utils_lib",
     ":config",
     "@npm//@types/node",
     "@npm//@types/require-relative",
@@ -154,22 +179,19 @@ ts_library(
     "@npm//svelte",
   ],
 
-  data = [
-    "sapper-dev-client.js",
-  ],
-
   srcs = glob([
-    "types/webpack-format-messages/*.ts",
     "src/core.ts",
     "src/core/**/*.ts",
-  ], exclude=[
-    "src/core/create_compilers/interfaces.ts",
   ]),
 )
 
 ts_library(
-  name = "api",
-  tsconfig = "tsconfig.nostrict.json",
+  name = "api_lib",
+  module_name = 'sapper/api',
+  module_root = 'src/api.d.ts',
+
+  visibility = ["//visibility:public"],
+  tsconfig = ":tsconfig.nostrict.json",
   generate_externs = False,
 
   data = [
@@ -177,8 +199,9 @@ ts_library(
   ],
 
   deps = [
-    ":interfaces",
-    ":core",
+    ":interfaces_lib",
+    ":utils_lib",
+    ":core_lib",
     ":config",
     "@npm//@types/node",
     "@npm//@types/node-fetch",
@@ -190,6 +213,7 @@ ts_library(
     "@npm//cheap-watch",
     "@npm//port-authority",
     "@npm//shimport",
+    "@npm//svelte",
   ],
 
   srcs = glob([
@@ -200,12 +224,12 @@ ts_library(
 
 ts_library(
   name = "cli",
-  tsconfig = "tsconfig.json",
+  tsconfig = ":tsconfig.build.json",
   generate_externs = False,
 
   deps = [
-    ":api",
-    ":interfaces",
+    ":api_lib",
+    ":interfaces_lib",
     "@npm//@types/node",
     "@npm//@types/sade",
     "@npm//kleur",
@@ -219,11 +243,14 @@ ts_library(
   visibility = ["//visibility:public"],
 )
 
-exports_files(["src/cli.ts"])
+exports_files([
+  "src/cli.ts",
+  "internal/rollup.config.js",
+])
 
 ts_library(
   name = "config",
-  tsconfig = "tsconfig.json",
+  tsconfig = ":tsconfig.build.json",
   generate_externs = False,
   deps = [
     "@npm//@types/node",
@@ -237,13 +264,113 @@ ts_library(
 )
 
 nodejs_binary(
-  name = "sapper",
+  name = "sapper_cli",
   entry_point = ":src/cli.ts",
   data = [
     ":cli",
     ":config",
 
     # "package.json",
+  ],
+  visibility = ["//visibility:public"],
+)
+
+ts_library(
+  name = "rollup_lib",
+  module_name = 'sapper/rollup',
+  module_root = 'src/rollup.d.ts',
+  srcs = glob([
+    "src/rollup/**/*.ts",
+    "src/rollup.ts",
+  ]),
+  deps = [
+    ":api_lib",
+    ":core_lib",
+    ":interfaces_lib",
+
+    # "@npm//shimport",
+    "@npm//nollup",
+    "@npm//acorn-walk",
+    "@npm//@types/node",
+    "@npm//rollup",
+    "@npm//sourcemap-codec",
+    "@npm//kleur",
+    "@npm//pretty-bytes",
+    "@npm//svelte",
+  ],
+
+  visibility = ["//visibility:public"],
+)
+
+rollup_bundle(
+  name = "core",
+  config_file = "rollup.bazel-config.js",
+  entry_points = {
+    "src/core.ts": "index",
+  },
+  output_dir = True,
+  srcs = [
+    ":package.json",
+  ],
+  format = "cjs",
+  deps = [
+    "@npm//@rollup/plugin-node-resolve",
+    "@npm//@rollup/plugin-commonjs",
+    "@npm//@rollup/plugin-json",
+    ":core_lib",
+  ],
+)
+
+rollup_bundle(
+  name = "api",
+  config_file = "rollup.bazel-config.js",
+  entry_points = {
+    "src/api.ts": "index",
+  },
+  output_dir = True,
+  srcs = [
+    ":package.json",
+  ],
+  format = "cjs",
+  deps = [
+    "@npm//@rollup/plugin-node-resolve",
+    "@npm//@rollup/plugin-commonjs",
+    "@npm//@rollup/plugin-json",
+    ":api_lib",
+  ],
+)
+
+rollup_bundle(
+  name = "rollup",
+  config_file = "rollup.bazel-config.js",
+  entry_points = {
+    "src/rollup.ts": "index",
+  },
+  output_dir = True,
+  srcs = [
+    ":package.json",
+  ],
+  format = "cjs",
+  deps = [
+    "@npm//mime",
+    "@npm//@rollup/plugin-node-resolve",
+    "@npm//@rollup/plugin-commonjs",
+    "@npm//@rollup/plugin-json",
+    ":rollup_lib",
+  ],
+)
+
+pkg_npm(
+  name = "sapper_pkg",
+  package_name = "sapper",
+  deps = [
+    ":api",
+    ":core",
+    ":rollup",
+
+    "runtime_bundles",
+    # ":runtime/server.mjs",
+    # ":runtime/app.mjs",
   ],
   visibility = ["//visibility:public"],
 )

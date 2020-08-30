@@ -1,6 +1,7 @@
-import { PageResource } from './interfaces';
+import { PageResource, Json } from '../interfaces';
 
-import { dedupe, Json } from './resources'
+import { dedupe } from '../dedupe'
+import { RouteManifestAssets } from '../../interfaces';
 
 function flatten_and_dedupe<T extends Json>(lists: T[][]): T[] {
   return dedupe((<T[]>[]).concat(...lists))
@@ -30,14 +31,17 @@ export function replace_pattern_in_source_code(
   });
 }
 
-export default function inject_resources(
+export function inject_resources(
   source: string,
   route_resources: Record<string, PageResource[]>,
   main_resources: PageResource[],
-  main_legacy_resources: PageResource[],
+  main_legacy_resources: PageResource[] | undefined,
+  
 ): string {
-  let replaced = replace_pattern_in_source_code(
-    source,
+  let replaced = source
+
+  replaced = replace_pattern_in_source_code(
+    replaced,
     /(\\?["'])__SAPPER_CSS_PLACEHOLDER:([^"']+?)__\1/g,
     (m, quotes, route) => {
       const css_deps = (route_resources[route] || []).filter(({ type }) => type === 'style').map(({ file }) => file)
@@ -84,10 +88,33 @@ export default function inject_resources(
     (m, quotes) => {
       return {
         quotes,
-        replacement: JSON.stringify(main_legacy_resources)
+        replacement: JSON.stringify(main_legacy_resources || [])
       }
     }
   )
-      
+
+  return replaced
+}
+
+export function inject_assets(
+  source: string,
+  assets: RouteManifestAssets,
+): string {
+  let replaced = source
+
+  replaced = replace_pattern_in_source_code(
+    replaced,
+    /(\\?["'])__SAPPER_ASSETS_PLACEHOLDER__\1/g,
+    (m, quotes) => {
+      return {
+        quotes,
+        replacement: `{
+          directory: path.resolve(__dirname, ${JSON.stringify(assets.directory)}),
+          entries: ${JSON.stringify(assets.entries)}
+        }`
+      }
+    }
+  )
+
   return replaced
 }

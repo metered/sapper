@@ -1,7 +1,5 @@
 load("@bazel_skylib//lib:paths.bzl", "paths")
 
-# load("@build_bazel_rules_nodejs//:providers.bzl", "", "", "", "NodeContextInfo", "NpmPackageInfo", "DeclarationInfo", "node_modules_aspect", "run_node", "js_ecma_script_module_info")
-
 load(":internal/forest_layout.bzl", "forest_layout", "ForestLayoutInfo")
 
 load("@build_bazel_rules_nodejs//:providers.bzl", "LinkablePackageInfo")
@@ -30,6 +28,18 @@ def _emit_leaf(cmd, dirs, dst, src):
     return cmd + "cp '{src}' '{dst}'\n".format(src=src.path, dst=dst.path)
 
 def _tree_artifact_impl(ctx):
+    msg = "tree_artifact\n"
+    msg += "  name: " + str(ctx.label) + "\n"
+    if ctx.attr.deps:
+        msg += "  deps:" + "\n"
+        for dep in ctx.attr.deps:
+            msg += "    " + str(dep.label) + "\n"
+    if ctx.attr.mapped_output_groups:
+        msg += "  mapped_output_groups:" + "\n"
+        for prefix, output_group in ctx.attr.mapped_output_groups.items():
+            msg += "    " + prefix + ": " + str(output_group) + "\n"
+    # print(msg)
+
     dirs = {}
     cmd = ""
     inputs = []
@@ -48,12 +58,13 @@ def _tree_artifact_impl(ctx):
     for dst_dir in sorted(dirs.keys(), reverse=True):
         cmd = "rm -rf '{dst_dir}' && mkdir -p '{dst_dir}'\n".format(dst_dir=dst_dir) + cmd
 
-    ctx.actions.run_shell(
-        outputs=outputs,
-        inputs=depset(inputs),
-        arguments=[],
-        command=cmd,
-    )
+    if outputs:
+        ctx.actions.run_shell(
+            outputs=outputs,
+            inputs=depset(inputs),
+            arguments=[],
+            command=cmd,
+        )
 
     files = depset(outputs)
     path = "/".join([p for p in [ctx.bin_dir.path, ctx.label.workspace_root, ctx.label.package, ctx.label.name] if p])

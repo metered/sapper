@@ -2,8 +2,8 @@
 
 import {
   Preload as _Preload,
-  ComponentConstructor,
-  ComponentModule,
+  DOMComponentConstructor,
+  DOMComponentModule,
   Page,
   ErrorProps,
 } from './shared';
@@ -16,15 +16,14 @@ export type Fetch = (
 export type Preload<Props> = _Preload<Fetch, Props>
 
 export interface Branch<Props> {
-  component?: ComponentConstructor<Props>;
+  // component?: DOMComponentModule<Fetch, Props>;
   segment: string;
   part?: number;
-  preload?: Preload<Props>;
   match?: RegExpExecArray;
 }
 
-export type ComponentLoader<Props=unknown> = {
-  js: () => Promise<ComponentModule<Props>>,
+export type DOMComponentLoader<Props=unknown> = {
+  js: () => Promise<DOMComponentModule<Fetch, Props>>,
   css: string[]
 };
 
@@ -38,8 +37,8 @@ export type Route = {
 
 export type Manifest = {
   ignore: RegExp[];
-  root: ComponentConstructor;
-  error: () => Promise<ComponentModule<ErrorProps>>;
+  root: DOMComponentModule<Fetch>;
+  error: () => Promise<DOMComponentModule<Fetch, ErrorProps>>;
   pages: Route[]
 };
 
@@ -62,8 +61,7 @@ export interface History {
 }
 
 export const routes: Route[]
-export const components: ComponentLoader[]
+export const components: DOMComponentLoader[]
 export const ignore: RegExp[]
-export const ErrorComponent: ComponentConstructor<ErrorProps>
-
-export const root_preload: Preload<unknown>
+export const error: DOMComponentModule<Fetch, ErrorProps>
+export const root: DOMComponentModule<Fetch, unknown>

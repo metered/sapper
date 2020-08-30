@@ -2,7 +2,7 @@ import * as path from 'path';
 import colors from 'kleur';
 import pb from 'pretty-bytes';
 
-import { CompileError } from './interfaces';
+import { CompileError } from '../interfaces';
 
 export function left_pad(str: string, len: number) {
   while (str.length < len) str = ` ${str}`;

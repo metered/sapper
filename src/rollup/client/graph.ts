@@ -1,11 +1,21 @@
 import { Chunk } from "./chunk";
-import { PageResource } from './interfaces';
+import { PageResource } from '../interfaces';
 
 export function graph(routes: Record<string, PageResource[]>, chunks: Iterable<Chunk>) {
   const visited = new Set<Chunk>()
   const to_visit = new Set<Chunk>(chunks)
   const nodes = []
   const edges = []
+
+  const route_label = (route: string) => JSON.stringify(`/${route.replace(/\.svelte/, '')}`)
+  nodes.push(`{ rank = min; ${Object.keys(routes).map(d => route_label(d)).join("; ")} };`)
+  for (const route of Object.keys(routes).sort()) {
+    const resources = routes[route]
+    for (const resource of resources) {
+      edges.push(`  ${route_label(route)} -> ${JSON.stringify(resource.file)};`)
+    }
+  }
+
   for (const chunk of to_visit) {
     if (visited.has(chunk)) {
       continue
@@ -19,13 +29,6 @@ export function graph(routes: Record<string, PageResource[]>, chunks: Iterable<C
     }
   }
 
-  const route_label = (route: string) => JSON.stringify(`/${route.replace(/\.svelte/, '')}`)
-  nodes.push(`{ rank = min; ${Object.keys(routes).map(d => route_label(d)).join("; ")} };`)
-  for (const [route, resources] of Object.entries(routes)) {
-    for (const resource of resources) {
-      edges.push(`  ${route_label(route)} -> ${JSON.stringify(resource.file)};`)
-    }
-  }
 
   // Style inspired by https://github.com/sverweij/dependency-cruiser/blob/develop/src/report/dot/default-theme.json
   // TODO give different colors to routes, script/module, css

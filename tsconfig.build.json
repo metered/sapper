@@ -1,23 +1,17 @@
 {
     "compilerOptions": {
         "esModuleInterop": true,
+        "downlevelIteration": true,
         "diagnostics": true,
         "strict": true,
         "noEmitOnError": true,
-        "allowJs": true,
+        // "allowJs": true,
         "lib": ["es5", "es6"],
         "importHelpers": true,
-        "target": "ES5",
-        "types": ["@sapper"],
+        "target": "ES6",
         "typeRoots": [
             "./types",
             "./node_modules/@types"
         ]
     },
-    "include": [
-        "src"
-    ],
-    "exclude": [
-        "node_modules"
-    ]
 }

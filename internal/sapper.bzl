@@ -1,117 +1,15 @@
 load("@build_bazel_rules_nodejs//:index.bzl", "nodejs_binary")
-load("@npm//@bazel/rollup:index.bzl", "rollup_bundle")
+load(":internal/rollup_bundle.bzl", "rollup_bundle")
 
 load("//tools/internal/svelte:index.bzl", "svelte_library")
-load("@build_bazel_rules_nodejs//:providers.bzl", "JSEcmaScriptModuleInfo", "JSModuleInfo", "LinkablePackageInfo", "NodeContextInfo", "NpmPackageInfo", "node_modules_aspect")
+load("@build_bazel_rules_nodejs//:providers.bzl", "JSEcmaScriptModuleInfo", "DeclarationInfo", "JSModuleInfo", "LinkablePackageInfo", "NodeContextInfo", "NpmPackageInfo", "node_modules_aspect")
+load("@build_bazel_rules_nodejs//:index.bzl", "pkg_npm")
 
 load(":internal/forest_layout.bzl", "forest_layout")
+load(":internal/js_library.bzl", "js_library")
 
 load(":internal/tree_artifact.bzl", "tree_artifact", "TreeArtifactInfo")
 
-def _sapper_codegen_impl(ctx):
-    deps_depsets = [
-        ctx.attr.base[TreeArtifactInfo].sources
-    ]
-
-    output_dir = "/".join([p for p in [ctx.bin_dir.path, ctx.label.workspace_root, ctx.label.package, ctx.label.name] if p])
-    outputs = [
-        ctx.actions.declare_file(ctx.label.name + "/internal/App.svelte"),
-        ctx.actions.declare_file(ctx.label.name + "/internal/error.svelte"),
-        ctx.actions.declare_file(ctx.label.name + "/internal/layout.svelte"),
-        ctx.actions.declare_file(ctx.label.name + "/internal/shared.mjs"),
-        ctx.actions.declare_file(ctx.label.name + "/internal/manifest-client.mjs"),
-        ctx.actions.declare_file(ctx.label.name + "/internal/manifest-server.mjs"),
-        ctx.actions.declare_file(ctx.label.name + "/internal/manifest-data.json"),
-        ctx.actions.declare_file(ctx.label.name + "/app.mjs"),
-        ctx.actions.declare_file(ctx.label.name + "/server.mjs"),
-        ctx.actions.declare_file(ctx.label.name + "/package.json"),
-    ]
-    base_path = ctx.attr.base[TreeArtifactInfo].path
-
-    ctx.actions.run_shell(
-        tools = [ctx.executable.sapper],
-        inputs = depset(transitive = deps_depsets).to_list(),
-        outputs = outputs,
-        env = {
-            "NODE_ENV": "development" if ctx.var["COMPILATION_MODE"] == "fastbuild" else "production",
-            "COMPILATION_MODE": ctx.var["COMPILATION_MODE"],
-        },
-        command = """
-{sapper} {sapper_command} {sapper_options} \\
-    --bundler {bundler} \\
-    --src {base}/src \\
-    --static {base}/static \\
-    --routes {base}/src/routes \\
-    --routes_alias @/src/routes \\
-    {output}
-echo '{{"name": "@sapper"}}' > {output}/package.json
-""".format(
-            bundler = ctx.attr.bundler,
-            sapper_command = ctx.attr.sapper_command,
-            sapper_options = "" if ctx.var["COMPILATION_MODE"] == "opt" else "--dev",
-            sapper = ctx.executable.sapper.path,
-            base = base_path,
-            output = output_dir,
-        )
-    )
-    # outputs = [output_dir]
-
-    return [
-        DefaultInfo(
-            files = depset(outputs),
-            # runfiles = ctx.runfiles(files = ctx.files.srcs),
-        ),
-        # LinkablePackageInfo(
-        #     package_name = "@sapper",
-        #     path = output_dir,
-        #     files = depset(outputs),
-        # ),
-    ]
-
-    
-_sapper_codegen = rule(
-    implementation = _sapper_codegen_impl,
-    attrs = {
-        "base": attr.label(
-            providers = [TreeArtifactInfo],
-        ),
-        "deps": attr.label_list(
-            aspects = [node_modules_aspect],
-        ),
-        "node_context_data": attr.label(
-            default = "@build_bazel_rules_nodejs//internal:node_context_data",
-            providers = [NodeContextInfo],
-            doc = "Internal use only",
-        ),
-        "sapper_command": attr.string(
-            default = "codegen",
-        ),
-        "bundler": attr.string(),
-        "sapper": attr.label(
-            cfg = "host",
-            executable = True,
-        ),
-    },
-)
-
-
-def _sapper_entrypoint_impl(ctx):
-    entrypoint = ctx.actions.declare_file(ctx.label.name)
-    outputs = [entrypoint]
-    ctx.actions.write(entrypoint, ctx.attr.contents)
-
-    return [
-        DefaultInfo(
-            files = depset(outputs),
-        )
-    ]
- 
-_sapper_entrypoint = rule(
-    implementation = _sapper_entrypoint_impl,
-    attrs = {
-        "contents": attr.string()
-    },
-)
 
 def _just_files_impl(ctx):
     return [
@@ -124,77 +22,136 @@ _just_files = rule(
         "files": attr.label_list(
             allow_files = True,
         ),
+        "deps": attr.label_list(),
+    },
+)
+
+def _no_ext(f):
+    return f.short_path[:-len(f.extension) - 1]
+
+def _resolve_js_input(f, inputs):
+    if f.extension == "js" or f.extension == "mjs":
+        return f
+
+    # look for corresponding js file in inputs
+    no_ext = _no_ext(f)
+    for i in inputs:
+        if i.extension == "js" or i.extension == "mjs":
+            if _no_ext(i) == no_ext:
+                return i
+    fail("Could not find corresponding javascript entry point for %s. Add the %s.js to your deps." % (f.path, no_ext))
+
+def _filter_js(files):
+    return [f for f in files if f.extension == "js" or f.extension == "mjs"]
+
+def _sapper_server_rollup_config_impl(ctx):
+    config = ctx.actions.declare_file("_%s.rollup_config.js" % ctx.label.name)
+
+    # rollup_bundle supports deps with JS providers. For each dep,
+    # JSEcmaScriptModuleInfo is used if found, then JSModuleInfo and finally
+    # the DefaultInfo files are used if the former providers are not found.
+    deps_depsets = []
+    for dep in ctx.attr.deps:
+        if JSEcmaScriptModuleInfo in dep:
+            deps_depsets.append(dep[JSEcmaScriptModuleInfo].sources)
+        elif JSModuleInfo in dep:
+            deps_depsets.append(dep[JSModuleInfo].sources)
+        elif hasattr(dep, "files"):
+            deps_depsets.append(dep.files)
+
+        # Also include files from npm deps as inputs.
+        # These deps are identified by the NpmPackageInfo provider.
+        if NpmPackageInfo in dep:
+            deps_depsets.append(dep[NpmPackageInfo].sources)
+
+    if ctx.attr.typing and DeclarationInfo in ctx.attr.typing:
+        deps_depsets.append(ctx.attr.typing[DeclarationInfo].declarations)
+
+    deps_inputs = depset(transitive = deps_depsets).to_list()
+
+    inputs = _filter_js(ctx.files.client_entry_point) + _filter_js(ctx.files.client_bundler_config) + deps_inputs
+
+    client_entry_point = _resolve_js_input(ctx.file.client_entry_point, inputs)
+    client_bundler_config = _resolve_js_input(ctx.file.client_bundler_config, inputs)
+    ctx.actions.expand_template(
+        template = ctx.file._config_file,
+        output = config,
+        substitutions = {
+            "${client_entry_point}": "/".join([f for f in [client_entry_point.path] if f]),
+            "${client_bundler_config}": "/".join([f for f in [client_bundler_config.path] if f]),
+            "${typing}": ctx.attr.typing[DeclarationInfo].declarations.to_list()[0].path,
+            "${typing_amd_module_name}": ctx.attr.typing_amd_module_name or "",
+            "${manifest_path}": ctx.attr.manifest_path,
+            "${routes_alias}": ctx.attr.routes_alias,
+            "${package_alias}": ctx.attr.package_alias,
+            "${routes_src_dir}": ctx.attr.routes_src_dir[TreeArtifactInfo].path + "/src/routes",
+            "${static_dir}": ctx.attr.static_dir[TreeArtifactInfo].path,
+            "${template_path}": ctx.file.template_path.path,
+        },
+    )
+
+    return [
+        DefaultInfo(
+            files = depset([config]),
+        )
+    ]
+
+_sapper_server_rollup_config = rule(
+    implementation = _sapper_server_rollup_config_impl,
+    attrs = {
+        "_config_file": attr.label(
+            default = "//tools/sapper:internal/rollup.config.js",
+            allow_single_file = True,
+        ),
+        "deps": attr.label_list(),
+        "client_entry_point": attr.label(
+            allow_single_file = True,
+        ),
+        "client_bundler_config": attr.label(
+            allow_single_file = True,
+        ),
+        "typing": attr.label(
+            allow_single_file = True,
+        ),
+        "typing_amd_module_name": attr.string(),
+        "manifest_path": attr.string(),
+        "static_dir": attr.label(),
+        "routes_src_dir": attr.label(),
+        "routes_alias": attr.string(),
+        "package_alias": attr.string(),
+        "template_path": attr.label(
+            allow_single_file = True,
+        ),
     },
 )
 
 
 def sapper(
         name,
+        package_name,
         client,
+        client_template,
         client_entry_point,
         client_bundler_config,
         server,
         server_entry_point,
-        server_bundler_config,
-        client_bundler_deps=[],
-        server_bundler_deps=[],
-        files=[],
-        mapped_files={},
+        bundler_deps=[],
+        srcs=[],
         deps=None,
         tags=None,
         **kwargs,
     ):
-    nodejs_binary(
-        name = name + ".sapper-tool",
-        entry_point = "//tools/sapper:src/cli.ts",
-        data = [
-            "//tools/sapper:cli",
-            "//tools/sapper:config",
-        ],
-    )
 
     forest_layout(
-        name = name + ".root",
+        name = "_" + name + ".root",
         tree = "root",
-        deps = deps,
-        mapped_files = mapped_files,
-        files = files,
+        deps = srcs,
     )
 
     tree_artifact(
-        name = name + ".tree",
+        name = "_" + name + ".routes",
         deps = [
-            ":" + name + ".root",
-        ],
-        package_name = "@",
-        mapped_output_groups = {
-            "root": "",
-            "pages": "src/routes/",
-            "server_routes": "src/routes/",
-        },
-    )
-
-    _sapper_codegen(
-        name = name + ".sapper-codegen",
-        base = ":" + name + ".tree",
-        sapper = ":" + name + ".sapper-tool",
-        deps = deps,
-        bundler = 'rollup',
-        **kwargs,
-    )
-
-    svelte_library(
-        name = name + ".sapper-libgen",
-        srcs = [
-            ":"  + name + ".sapper-codegen",
-        ],
-        package_name = "@sapper",
-    )
-
-    tree_artifact(
-        name = name + ".routes",
-        deps = [
-            ":" + name + ".root",
+            ":" + "_" + name + ".root",
         ],
         mapped_output_groups = {
             "pages": "src/routes/",
@@ -203,85 +160,93 @@ def sapper(
     )
 
     svelte_library(
-        name = name + ".sapper-routes",
+        name = "_" + name + ".sapper-routes",
         srcs = [
-            ":" + name + ".routes",
+            ":" + "_" + name + ".routes",
         ],
         package_name = "@",
     )
 
-    rollup_bundle(
-        name = name + "/__sapper__/build/client",
-        deps = [
-            client,
-            "//tools/sapper:config",
-            ":" + name + ".sapper-routes",
-            ":" + name + ".sapper-libgen",
-        ] + client_bundler_deps + deps,
-        config_file = client_bundler_config,
-        format = 'esm',
-        output_dir = True,
-        entry_points = {
-            client_entry_point: "index"
-        },
-    )
-
-    _just_files(
-        name = name + ".sapper-client-bundle",
-        files = [
-            ":" + name + "/__sapper__/build/client",
-        ]
-    )
-
-    rollup_bundle(
-        name = name + "/__sapper__/build/server",
-        srcs = [
-            "//:package.json",
-        ],
-        deps = [
-            server,
-            "//tools/sapper:config",
-            ":" + name + ".sapper-routes",
-            ":" + name + ".sapper-libgen",
-            ":" + name + ".sapper-client-bundle",
-        ] + server_bundler_deps + deps,
-        config_file = server_bundler_config,
-        format = "cjs",
-        output_dir = True,
-        entry_points = {
-            server_entry_point: "server",
-        },
-    )
-
     tree_artifact(
-        name = name + "/static",
+        name = "_" + name + ".static",
         deps = [
-            ":" + name + ".root",
+            ":" + "_" + name + ".root",
         ],
         mapped_output_groups = {
             "static": "",
         },
     )
 
-    _sapper_entrypoint(
-        name = name + "/__sapper__/build/index.js",
-        contents = """
-// generated by sapper bazel rule
-process.env.NODE_ENV = process.env.NODE_ENV || 'production';
-process.env.PORT = process.env.PORT || 3000;
+    manifest_file = "manifest.json"
+    _sapper_server_rollup_config(
+        name = "_" + name + ".rollup.config.js",
+        deps = [
+            client,
+        ],
+        client_entry_point = client_entry_point,
+        client_bundler_config = client_bundler_config,
+        manifest_path = manifest_file,
+        package_alias = "@sapper",
+        routes_alias = "@/src/routes",
+        static_dir = ":" + "_" + name + ".static",
+        typing = server,
+        typing_amd_module_name = package_name,
 
-console.log('Starting server on port ' + process.env.PORT);
-require('./server/server.js');
-"""
+        routes_src_dir = ":" + "_" + name + ".routes",
+        template_path = client_template,
     )
 
-    nodejs_binary(
-        name = name + ".server",
-        entry_point = ":" + name + "/__sapper__/build",
-        data = [
-            ":" + name + "/__sapper__/build/index.js",
-            ":" + name + "/__sapper__/build/client",
-            ":" + name + "/__sapper__/build/server",
-            ":" + name + "/static",
+    native.filegroup(
+        name = "_" + name + ".declarations",
+        srcs = [
+            server,
+        ],
+    )
+
+    rollup_bundle(
+        name = name + ".bundle",
+        srcs = [
+            ":" + "_" + name + ".static",
+            ":" + "_" + name + ".routes",
+            ":" + "_" + name + ".declarations",
+            client_entry_point,
+            client_bundler_config,
+            client_template,
+        ],
+        deps = [
+            client,
+            server,
+            ":" + "_" + name + ".sapper-routes",
+            "//tools/sapper:sapper_pkg",
+        ] + bundler_deps + deps + srcs,
+        typings = True,
+        config_file = "_" + name + ".rollup.config.js",
+        format = "cjs",
+        extra_outputs = [manifest_file],
+        asset_file_names = "assets/[name][extname]",
+        entry_points = {
+            server_entry_point: "index",
+        },
+    )
+
+    _just_files(
+        name = name + ".bundle-files",
+        files = [
+            ":" + name + ".bundle",
         ]
+    )
+
+    js_library(
+        name = name,
+        srcs = [
+            ":" + name + ".bundle-files",
+        ],
+        # package_path_prefix = name + ".bundle",
+        # module_name = "metered/" + native.package_name(),
+        # package_name = "metered/" + native.package_name() + "/" + name,
+        package_name = package_name,
+        deps = deps + [ 
+            # TODO We want all the npm dependencies of srcs... 
+            server, # We want to use all the dependencies of server...
+        ],
     )

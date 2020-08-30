@@ -12,9 +12,9 @@ import {
 	PreloadError,
 	Query,
 	Page,
-	ComponentModule,
-	ComponentConstructor,
-	Level,
+	DOMComponentModule,
+	DOMComponentConstructor,
+	DOMLevel,
 	Session,
 	PreloadContext,
 	ErrorProps,
@@ -24,14 +24,14 @@ import {
 	Stores,
 } from '@sapper/internal/shared';
 import {
-	root_preload,
-	ErrorComponent,
+	root,
+	error,
 	ignore,
 	components,
 	routes,
 	Target,
 	ScrollPosition,
-	ComponentLoader,
+	DOMComponentLoader,
 	Branch,
 	Preload,
 	Fetch,
@@ -192,17 +192,17 @@ export function select_target(url: URL): Target | null {
 	return null
 }
 
-export async function handle_error(url: URL, status: number, error: Error) {
+export async function handle_error(url: URL, status: number, _error: Error) {
 	const { host, pathname, search } = url;
 
 	const props: BrowserAppPropsUpdate<ErrorProps> = {
 		stores,
 		level1: {
 			props: {
-				error,
+				error: _error,
 				status,
 			},
-			component: ErrorComponent
+			component: error.default
 		},
 		segments: pathname.split('/').filter(Boolean),
 	}
@@ -373,6 +373,7 @@ export async function hydrate_target(target: Target): Promise<HydratedTarget> {
 	};
 
 	if (!root_preloaded) {
+		const root_preload = root.preload || (() => {});
 		root_preloaded = initial_data.preloaded[0] || preloader(preload_context, root_preload, {
 			host: page.host,
 			path: page.path,
@@ -409,15 +410,15 @@ export async function hydrate_target(target: Target): Promise<HydratedTarget> {
 
 			segment_dirty = false;
 
-			const { default: component, preload } = await load_component(components[part.i]);
+			const component = await load_component(components[part.i]);
 
 			let preloaded;
 			if (ready || !initial_data.preloaded[i + 1]) {
 				if (!$session) {
 					throw new Error("Internal error: $session is not yet defined")
 				}
-				preloaded = preload
-					? await preloader(preload_context, preload, {
+				preloaded = component.preload
+					? await preloader(preload_context, component.preload, {
 						host: page.host,
 						path: page.path,
 						query: page.query,
@@ -428,7 +429,7 @@ export async function hydrate_target(target: Target): Promise<HydratedTarget> {
 				preloaded = initial_data.preloaded[i + 1];
 			}
 
-			const level: Level = { component, props: preloaded, segment, match, part: part.i }
+			const level: DOMLevel = { component: component.default, props: preloaded, segment, match, part: part.i }
 			return ((props as any)[`level${j}`] = level);
 		}));
 	} catch (error) {
@@ -458,10 +459,7 @@ function load_css(chunk: string) {
 	});
 }
 
-export async function load_component<T>(component: ComponentLoader<T>): Promise<{
-	default: ComponentConstructor<T>,
-	preload?: Preload<T>
-}> {
+export async function load_component<T>(component: DOMComponentLoader<T>): Promise<DOMComponentModule<Fetch, T>> {
 	// TODO this is temporary — once placeholders are
 	// always rewritten, scratch the ternary
 	const promises: any[] = (typeof component.css === 'string' ? [] : component.css.map(load_css));
@@ -469,7 +467,7 @@ export async function load_component<T>(component: ComponentLoader<T>): Promise<
 
 	// NB TypeScript's definition of Promise.all doesn't have a generic definition for [head, ...rest]
 	const values = await Promise.all(promises)
-	return values[0] as ComponentModule
+	return values[0] as DOMComponentModule<Fetch, T>
 }
 
 function detach(node: Node) {

@@ -3,7 +3,7 @@ import { IncomingHttpHeaders, OutgoingHttpHeaders } from 'http';
 import {
   Preload as _Preload,
   SSRLevel1,
-  SSRComponent,
+  SSRComponentModule,
   ErrorProps,
   Session,
   BaseContext,
@@ -35,14 +35,16 @@ export type SessionSeed<Req, Res> = (req: Req, res: Res) => Session | Promise<Se
 
 export function read_template(): string
 
-export const build_dir: string
-export function set_build_dir(s: string): void
-
-export const dev: boolean
-export const manifest: Manifest
 export const has_service_worker: boolean
 
+export const dev: boolean
+
+export const manifest: ServerManifest
+
+export const assets_manifest: RouteManifestAssets
+
 import { IncomingMessage, ServerResponse } from 'http';
+import { RouteManifestAssets } from '../interfaces';
 
 export interface SSRLevel<Props> extends SSRLevel1<Props> {
   segment?: string;
@@ -56,36 +58,35 @@ export type ServerRoute = {
   params: (match: RegExpMatchArray) => Record<string, string>;
 };
 
-export type ManifestPagePart<Props> = {
+export type ServerPagePart<Props> = {
   name: string | null;
   file?: string;
-  component: SSRComponent<Props>;
+  component: SSRComponentModule<Fetch, Props>;
   params?: (match: RegExpMatchArray | null) => Record<string, string>;
   preload?: Preload<Props>;
 }
 
-export interface ManifestResource {
+export interface ServerResource {
   type: 'style' | 'script' | 'module'
   file: string
 }
 
-export type ManifestPage = {
+export type ServerPage = {
   pattern: RegExp | null;
-  resources: ManifestResource[]; // list of assets needed for transitive dependencies
-  parts: ManifestPagePart<unknown>[];
+  resources: ServerResource[]; // list of assets needed for transitive dependencies
+  parts: ServerPagePart<unknown>[];
 };
 
-export type Manifest = {
+export type ServerManifest = {
   server_routes: ServerRoute[];
-  pages: ManifestPage[];
+  pages: ServerPage[];
 
   shimport_version: string | null;
-  main_resources: ManifestResource[]; // list of resoruces needed for main
-  main_legacy_resources?: ManifestResource[]; // list of resoruces needed for main in legacy browsers
+  main_resources: ServerResource[]; // list of resoruces needed for main
+  main_legacy_resources?: ServerResource[]; // list of resoruces needed for main in legacy browsers
 
-  root: SSRComponent<unknown>;
-  root_preload?: Preload<unknown>;
-  error: SSRComponent<ErrorProps>;
+  root: SSRComponentModule<Fetch, unknown>;
+  error: SSRComponentModule<Fetch, ErrorProps>;
 }
 
 export type Handler<Rq extends Req, Rs extends Res> = (req: Rq, res: Rs, next: () => void) => void;
@@ -116,4 +117,3 @@ export interface Res extends ServerResponse {
   writeHead(statusCode: number, reasonPhrase?: string, headers?: OutgoingHttpHeaders): this;
   writeHead(statusCode: number, headers?: OutgoingHttpHeaders): this;
 }
-

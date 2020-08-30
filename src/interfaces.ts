@@ -1,7 +1,6 @@
 import * as child_process from 'child_process';
-import { CompileResult } from './core/create_compilers/interfaces';
 
-export type Route = {
+export interface Route {
 	id: string;
 	handlers: {
 		type: 'page' | 'route';
@@ -14,61 +13,60 @@ export type Route = {
 	params: string[];
 };
 
-export type Template = {
+export interface Template {
 	render: (data: Record<string, string>) => string;
 	stream: (req: unknown, res: unknown, data: Record<string, string | Promise<string>>) => void;
 };
 
-export type WritableStore<T> = {
+export interface WritableStore<T> {
 	set: (value: T) => void;
 	update: (fn: (value: T) => T) => void;
 	subscribe: (fn: (T: any) => void) => () => void;
 };
 
-export type PageComponent = {
+export interface PageComponent {
 	default?: undefined | true;
 	type?: undefined | string;
 	file?: undefined | string
 	name: string;
-	has_preload: boolean;
 }
 
-export type DefaultPageComponent = PageComponent & {
+export interface DefaultPageComponent extends PageComponent {
 	default?: true;
 	type: string;
 	file?: undefined;
 };
 
-export type UserPageComponent = PageComponent & {
+export interface UserPageComponent extends PageComponent {
 	default?: undefined;
 	type?: undefined;
 	file: string;
 };
 
-export type ManfiestDataPagePart = {
+export interface ManfiestDataPagePart {
 	component: UserPageComponent;
 	params: string[];
 }
 
-export type ManfiestDataPage = {
+export interface ManfiestDataPage {
 	pattern: RegExp;
 	parts: ManfiestDataPagePart[]
 };
 
-export type ServerRoute = {
+export interface ServerRoute {
 	name: string;
 	pattern: RegExp;
 	file: string;
 	params: string[];
 };
 
-export type Dirs = {
+export interface Dirs {
 	dest: string,
 	src: string,
 	routes: string
 };
 
-export type ManifestData = {
+export interface CodegenManifest {
 	routes_alias: string;
 	root: PageComponent;
 	error: PageComponent;
@@ -77,12 +75,14 @@ export type ManifestData = {
 	server_routes: ServerRoute[];
 };
 
-export type ReadyEvent = {
+
+
+export interface ReadyEvent {
 	port: number;
 	process: child_process.ChildProcess;
 };
 
-export type ErrorEvent = {
+export interface ErrorEvent {
 	type: string;
 	error: Error & {
 		frame?: unknown;
@@ -94,12 +94,12 @@ export type ErrorEvent = {
 	};
 };
 
-export type FatalEvent = {
+export interface FatalEvent {
 	message: string;
 	log?: unknown;
 };
 
-export type InvalidEvent = {
+export interface InvalidEvent {
 	changed: string[];
 	invalid: {
 		client: boolean;
@@ -108,21 +108,36 @@ export type InvalidEvent = {
 	}
 };
 
-export type BuildEvent = {
+export interface BuildEvent {
 	type: string;
 	errors: Array<{ file: string, message: string, duplicate: boolean }>;
 	warnings: Array<{ file: string, message: string, duplicate: boolean }>;
 	duration: number;
-	result: CompileResult;
 };
 
-export type FileEvent = {
+export interface FileEvent {
 	file: string;
 	size: number;
 };
 
-export type FailureEvent = {
+export interface FailureEvent {
 
 };
 
-export type DoneEvent = {};
+export interface DoneEvent {};
+
+
+
+export interface RouteHeader { key: string, value: string }
+// export interface RouteRewrite { source: string, destination: string }
+export type RouteManifestAssetEntries = Record<string, { headers: RouteHeader[] }>
+export interface RouteManifestAssets {
+	directory: string;
+	entries: RouteManifestAssetEntries;
+}
+export interface RouteManifest {
+	// rewrites: RouteRewrite[];
+	// headers: { source: string, headers: RouteHeader[] }[];
+	assets: RouteManifestAssets;
+	functions: Record<string, unknown>;
+}
