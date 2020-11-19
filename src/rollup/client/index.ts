@@ -9,6 +9,9 @@ import {
   OutputBundle,
   OutputChunk,
   ModuleInfo,
+  OutputAsset,
+  EmittedFile,
+  EmittedAsset,
 } from 'rollup'
 
 import * as fs from 'fs';
@@ -54,6 +57,7 @@ export interface SapperClientPackage {
 
 interface SapperClientPluginOptions {
   sourcemap: boolean | 'inline';
+  transform_asset: (asset: EmittedAsset) => EmittedAsset | Promise<EmittedAsset>,
   emit?: (crs: ClientResourceSet) => void
   manifest_data: CodegenManifest;
 }
@@ -72,6 +76,7 @@ function make_essential_module_filter(ctx: PluginContext, chunk: OutputChunk, es
 
 export function SapperClientPlugin({
   sourcemap,
+  transform_asset,
   emit,
   manifest_data,
 }: SapperClientPluginOptions): Plugin {
@@ -96,7 +101,7 @@ export function SapperClientPlugin({
         }
       }
 
-      console.log({ inputs})
+      console.log({ inputs })
 
       if (!entry_point) {
         entry_point = inputs[0].file
@@ -134,7 +139,7 @@ export function SapperClientPlugin({
       }
       const css_chunks_from_css_modules = async (chunk: OutputChunk, css_modules: Iterable<string>) => {
         const name = chunk.name + '.css'
-        const file_name = emit_code_and_sourcemap({
+        const file_name = await emit_code_and_sourcemap({
           sourcemap,
           output: await chunk_content_from_modules(
             css_modules,
@@ -142,8 +147,10 @@ export function SapperClientPlugin({
           ),
           sourcemap_url_prefix: '',
           output_file_name: name,
-          emit: (name, source) => {
-            const moduleid = this.emitFile({ name, type: 'asset', source })
+          emit: async (name, source) => {
+            const draft: EmittedAsset = { name, type: 'asset', source }
+            const final = transform_asset ? await transform_asset(draft) : draft
+            const moduleid = this.emitFile(final)
             const file = this.getFileName(moduleid)
             emitted.push({
               length: source.length,

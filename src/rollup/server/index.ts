@@ -11,6 +11,7 @@ import {
   rollup,
   OutputBundle,
   ResolveIdResult,
+  EmittedAsset,
 } from 'rollup'
 
 // import nollup from 'nollup'
@@ -32,9 +33,6 @@ interface SapperServerPluginOptions extends Omit<SapperCodegenPluginOptions, 'sv
   client_config_path: string;
   client_entry_point: string;
 
-  typing?: string;
-  typing_amd_module_name?: string;
-
   manifest_path: string;
   static_dir: string;
   routes_src_dir: string;
@@ -45,8 +43,6 @@ export function SapperServerPlugin({
   sourcemap,
   client_config_path,
   client_entry_point,
-  typing,
-  typing_amd_module_name,
   manifest_path,
 
   dev,
@@ -84,12 +80,36 @@ export function SapperServerPlugin({
         // we need to emit client assets here, using a nested build of rollup (!)
         // consider using nollup when in development mode, for SPEED
         const client_config = await load_rollup_config(client_config_path)
+        let client_options: RollupOptions = Object.assign(Object.create(null), client_config[0])
 
         console.log({ client_config })
 
         const sapper_client_plugin = SapperClientPlugin({
           sourcemap,
           emit: (v) => client_resources = v,
+          transform_asset: async (emitted_asset) => {
+            const plugins = client_options.plugins || []
+            for (const plugin of plugins) {
+              const transform_asset = (plugin as any).transformAsset
+              if (!transform_asset) {
+                continue
+              }
+
+              const {source, name, fileName} = emitted_asset
+              const transformed = await (transform_asset(source, name, fileName) as PromiseLike<string | EmittedAsset>)
+              if (!transformed) {
+                continue
+              }
+
+              if (typeof transformed === 'string') {
+                emitted_asset = Object.assign(Object.create(null), emitted_asset, { source: transformed })
+              } else if (typeof transformed === 'object') {
+                emitted_asset = transformed
+              }
+            }
+
+            return emitted_asset
+          },
           manifest_data: sapper_manifest_data,
         })
 
@@ -104,7 +124,6 @@ export function SapperServerPlugin({
           ...codegen_options,
         })
 
-        let client_options: RollupOptions = Object.assign(Object.create(null), client_config[0])
         client_options.input = client_entry_point
         client_options.plugins = client_options.plugins || []
         client_options.preserveSymlinks = options.preserveSymlinks
@@ -119,7 +138,7 @@ export function SapperServerPlugin({
           sourcemap,
           entryFileNames: '[name].[hash].js',
           chunkFileNames: '[name].[hash].js',
-          assetFileNames: '[name]-[hash][extname]',
+          assetFileNames: '[name].[hash][extname]',
         });
 
         if (!client_resources) {
@@ -259,19 +278,6 @@ export function SapperServerPlugin({
         }
 
         if (options.dir) {
-          if (typing) {
-            let typing_contents = await fs.promises.readFile(typing, 'utf-8')
-            if (typing_amd_module_name) {
-              const typing_amd_module_pattern = /\/\/\/ <amd-module name="[^"]+" \/>/
-              typing_contents = typing_contents.replace(typing_amd_module_pattern, '')
-              typing_contents = `/// <amd-module name="${typing_amd_module_name}" />\n${typing_contents}`
-            }
-            await fs.promises.writeFile(
-              path.join(options.dir, path.basename(typing)),
-              typing_contents,
-            )
-          }
-
           await fs.promises.writeFile(
             path.join(options.dir, manifest_path),
             JSON.stringify({

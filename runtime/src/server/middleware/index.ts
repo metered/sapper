@@ -1,4 +1,5 @@
-import { dev, manifest, Handler, Req, Res, ErrorHandler, BaseContextSeed, SessionSeed } from '@sapper/internal/manifest-server';
+import { Preloader } from '@sapper/internal/shared'
+import { dev, manifest, Handler, Req, Res, ErrorHandler, BaseContextSeed, SessionSeed, Fetch } from '@sapper/internal/manifest-server';
 import { get_server_route_handler } from './get_server_route_handler';
 import { get_page_handler } from './get_page_handler';
 import { get_dev_handler } from './get_dev_handler';
@@ -96,5 +97,5 @@ const noop_session: SessionSeed<any, any> = (...o: any[]) => ({})
 
 const noop_context: BaseContextSeed<any, any> = (...o: any[]) => ({
 	fetch: nodeFetch,
-	preload: (ctx, fn, page, session) => fn.call(ctx, page, session),
+	preload: ((ctx, fn, page, session) => fn.call(ctx, page, session)) as Preloader<Fetch, unknown>,
 })

@@ -10,7 +10,16 @@ import {
   Stores,
 } from './shared';
 
-export type AppContext = BaseContext<typeof fetch> & { history: History }
+import {
+  History,
+  NavigateHook,
+} from './manifest-client'
+
+export interface AppContext extends BaseContext<typeof fetch, unknown> {
+  // history: History
+  aroundNavigate: NavigateHook
+}
+
 export type AppContextSeed = (session: Session) => AppContext
 
 export interface BaseAppPropsInternal<Level0Props> {

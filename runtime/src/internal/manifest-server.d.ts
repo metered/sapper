@@ -30,7 +30,7 @@ export type FetchHeadersInit = HeadersInit
 
 type Preload<Props> = _Preload<PreloadContextFetch, Props>
 
-export type BaseContextSeed<Req, Res> = (req: Req, res: Res) => BaseContext<Fetch>
+export type BaseContextSeed<Req, Res> = (req: Req, res: Res) => BaseContext<Fetch, unknown>
 export type SessionSeed<Req, Res> = (req: Req, res: Res) => Session | Promise<Session>
 
 export function read_template(): string

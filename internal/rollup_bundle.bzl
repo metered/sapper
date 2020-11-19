@@ -1,6 +1,6 @@
 "Rules for running Rollup under Bazel"
 
-load("@build_bazel_rules_nodejs//:providers.bzl", "JSEcmaScriptModuleInfo", "JSModuleInfo", "NodeContextInfo", "NpmPackageInfo", "node_modules_aspect", "run_node")
+load("@build_bazel_rules_nodejs//:providers.bzl", "DeclarationInfo", "JSEcmaScriptModuleInfo", "JSModuleInfo", "NodeContextInfo", "NpmPackageInfo", "node_modules_aspect", "run_node")
 load("@build_bazel_rules_nodejs//internal/linker:link_node_modules.bzl", "module_mappings_aspect")
 load("@bazel_skylib//lib:paths.bzl", "paths")
 
@@ -141,6 +141,7 @@ If the program produces multiple chunks, you must specify this attribute.
 Otherwise, the outputs are assumed to be a single file.
 """,
     ),
+
     "rollup_bin": attr.label(
         doc = "Target that executes the rollup binary",
         executable = True,
@@ -165,9 +166,6 @@ Passed to the [`--sourcemap` option](https://github.com/rollup/rollup/blob/maste
 """,
         default = "inline",
         values = ["inline", "hidden", "true", "false"],
-    ),
-    "typings": attr.bool(
-      default = False,
     ),
     "srcs": attr.label_list(
         doc = """Non-entry point JavaScript source files from the workspace.
@@ -231,11 +229,11 @@ def _resolve_js_input(f, inputs):
                 return i
     fail("Could not find corresponding javascript entry point for %s. Add the %s.js to your deps." % (f.path, no_ext))
 
-def _rollup_outs(sourcemap, typings, extra_outputs, format, name, entry_point, entry_points, output_dir):
+def _rollup_outs(sourcemap, extra_outputs, format, name, entry_point, entry_points, output_dir):
     """Supply some labelled outputs in the common case of a single entry point"""
     result = {}
     for extra_output in extra_outputs:
-      result[extra_output] = extra_output
+        result[extra_output] = extra_output
     entry_point_outs = _desugar_entry_point_names(name, entry_point, entry_points)
     if output_dir:
         # We can't declare a directory output here, because RBE will be confused, like
@@ -250,8 +248,6 @@ def _rollup_outs(sourcemap, typings, extra_outputs, format, name, entry_point, e
             fail("Multiple entry points require that output_dir be set")
         out = entry_point_outs[0]
         result[out] = out + (".mjs" if format == 'esm' else '.js')
-        if typings:
-          result[out + "_d_ts"] = "%s.d.ts" % paths.split_extension(result[out])[0]
         if sourcemap == "true":
             result[out + "_map"] = "%s.map" % result[out]
       
@@ -264,7 +260,13 @@ def _filter_js(files):
     return [f for f in files if f.extension == "js" or f.extension == "mjs"]
 
 def _rollup_bundle(ctx):
-    "Generate a rollup config file and run rollup"
+    initial_outputs = []
+    format = ctx.attr.format
+    for o in dir(ctx.outputs):
+        # TODO filter these by extension!
+        output = getattr(ctx.outputs, o)
+        if output.extension != "ts":
+            initial_outputs.append(output)
 
     # rollup_bundle supports deps with JS providers. For each dep,
     # JSEcmaScriptModuleInfo is used if found, then JSModuleInfo and finally
@@ -285,7 +287,33 @@ def _rollup_bundle(ctx):
     deps_inputs = depset(transitive = deps_depsets).to_list()
 
     inputs = _filter_js(ctx.files.entry_point) + _filter_js(ctx.files.entry_points) + ctx.files.srcs + deps_inputs
-    outputs = [getattr(ctx.outputs, o) for o in dir(ctx.outputs)]
+
+    # List entry point argument first to save some argv space
+    # Rollup doc says
+    # When provided as the first options, it is equivalent to not prefix them with --input
+    entry_points = _desugar_entry_points(ctx.label.name, ctx.attr.entry_point, ctx.attr.entry_points, inputs).items()
+
+    outputs = _rollup_bundle_format(ctx, format, inputs, entry_points, initial_outputs)
+
+    outputs_depset = depset(outputs["all_outputs"])
+    providers = [
+        DefaultInfo(files = outputs_depset),
+        OutputGroupInfo(
+            # code = outputs["code_outputs"],
+            assets = outputs["asset_outputs"],
+        ),
+    ]
+    if ctx.attr.format == "esm":
+        providers.append(JSEcmaScriptModuleInfo(sources = outputs_depset))
+    else:
+        providers.append(JSModuleInfo(sources = outputs_depset))
+
+    return providers
+
+def _rollup_bundle_format(ctx, format, inputs, entry_points, initial_outputs):
+    "Generate a rollup config file and run rollup"
+    code_outputs = list(initial_outputs)
+    asset_outputs = []
 
     # See CLI documentation at https://rollupjs.org/guide/en/#command-line-reference
     args = ctx.actions.args()
@@ -293,32 +321,27 @@ def _rollup_bundle(ctx):
     # Add user specified arguments *before* rule supplied arguments
     args.add_all(ctx.attr.args)
 
-    # List entry point argument first to save some argv space
-    # Rollup doc says
-    # When provided as the first options, it is equivalent to not prefix them with --input
-    entry_points = _desugar_entry_points(ctx.label.name, ctx.attr.entry_point, ctx.attr.entry_points, inputs).items()
-
     # If user requests an output_dir, then use output.dir rather than output.file
     if ctx.attr.output_dir:
-        outputs.append(ctx.actions.declare_directory(ctx.label.name))
+        code_outputs.append(ctx.actions.declare_directory(ctx.label.name))
         for entry_point in entry_points:
             args.add_joined([entry_point[1], entry_point[0]], join_with = "=")
-        args.add_all(["--output.dir", outputs[-1].path])
+        args.add_all(["--output.dir", code_outputs[-1].path])
     else:
         entry_point = entry_points[0]
         args.add_joined([entry_point[1], entry_point[0]], join_with = "=")
-        args.add_all(["--output.dir", paths.dirname(outputs[0].path)])
+        args.add_all(["--output.dir", paths.dirname(code_outputs[0].path)])
 
-    if ctx.attr.format == 'esm':
+    if format == 'esm':
         args.add_all(['--output.entryFileNames', '[name].mjs'])
 
     if ctx.attr.asset_file_names:
         asset_file_names = ctx.attr.asset_file_names
         asset_dir = paths.dirname(asset_file_names)
-        outputs.append(ctx.actions.declare_directory(asset_dir))
+        asset_outputs.append(ctx.actions.declare_directory(asset_dir))
         args.add_all(["--output.assetFileNames", asset_file_names])
 
-    args.add_all(["--format", ctx.attr.format])
+    args.add_all(["--format", format])
 
     if ctx.attr.silent:
         # Run the rollup binary with the --silent flag
@@ -353,6 +376,8 @@ def _rollup_bundle(ctx):
     executable = "rollup_bin"
     execution_requirements = {}
 
+    outputs = [] + code_outputs + asset_outputs
+
     run_node(
         ctx,
         progress_message = "Bundling JavaScript %s [rollup]" % outputs[0].short_path,
@@ -365,12 +390,11 @@ def _rollup_bundle(ctx):
         env = {"COMPILATION_MODE": ctx.var["COMPILATION_MODE"]},
     )
 
-    outputs_depset = depset(outputs)
-
-    return [
-        DefaultInfo(files = outputs_depset),
-        JSModuleInfo(sources = outputs_depset),
-    ]
+    return dict(
+        all_outputs = outputs,
+        code_outputs = code_outputs,
+        asset_outputs = asset_outputs,
+    )
 
 rollup_bundle = rule(
     doc = _DOC,

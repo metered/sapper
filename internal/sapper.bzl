@@ -1,19 +1,16 @@
-load("@build_bazel_rules_nodejs//:index.bzl", "nodejs_binary")
 load(":internal/rollup_bundle.bzl", "rollup_bundle")
-
 load("//tools/internal/svelte:index.bzl", "svelte_library")
-load("@build_bazel_rules_nodejs//:providers.bzl", "JSEcmaScriptModuleInfo", "DeclarationInfo", "JSModuleInfo", "LinkablePackageInfo", "NodeContextInfo", "NpmPackageInfo", "node_modules_aspect")
-load("@build_bazel_rules_nodejs//:index.bzl", "pkg_npm")
-
+load("@build_bazel_rules_nodejs//:providers.bzl", "JSEcmaScriptModuleInfo", "JSModuleInfo", "NpmPackageInfo")
 load(":internal/forest_layout.bzl", "forest_layout")
 load(":internal/js_library.bzl", "js_library")
-
+load(":internal/copy_typing.bzl", "copy_typing")
 load(":internal/tree_artifact.bzl", "tree_artifact", "TreeArtifactInfo")
 
 
 def _just_files_impl(ctx):
+    path = "/".join([p for p in [ctx.bin_dir.path, ctx.label.workspace_root, ctx.label.package] if p])
     return [
-        DefaultInfo(files = depset(ctx.files.files))
+        DefaultInfo(files = depset(transitive = [depset(ctx.files.files)]))
     ]
 
 _just_files = rule(
@@ -64,9 +61,6 @@ def _sapper_server_rollup_config_impl(ctx):
         if NpmPackageInfo in dep:
             deps_depsets.append(dep[NpmPackageInfo].sources)
 
-    if ctx.attr.typing and DeclarationInfo in ctx.attr.typing:
-        deps_depsets.append(ctx.attr.typing[DeclarationInfo].declarations)
-
     deps_inputs = depset(transitive = deps_depsets).to_list()
 
     inputs = _filter_js(ctx.files.client_entry_point) + _filter_js(ctx.files.client_bundler_config) + deps_inputs
@@ -79,8 +73,6 @@ def _sapper_server_rollup_config_impl(ctx):
         substitutions = {
             "${client_entry_point}": "/".join([f for f in [client_entry_point.path] if f]),
             "${client_bundler_config}": "/".join([f for f in [client_bundler_config.path] if f]),
-            "${typing}": ctx.attr.typing[DeclarationInfo].declarations.to_list()[0].path,
-            "${typing_amd_module_name}": ctx.attr.typing_amd_module_name or "",
             "${manifest_path}": ctx.attr.manifest_path,
             "${routes_alias}": ctx.attr.routes_alias,
             "${package_alias}": ctx.attr.package_alias,
@@ -126,10 +118,11 @@ _sapper_server_rollup_config = rule(
 )
 
 
-def sapper(
+def sapper(*,
         name,
         package_name,
         client,
+        client_srcs=[],
         client_template,
         client_entry_point,
         client_bundler_config,
@@ -177,76 +170,87 @@ def sapper(
         },
     )
 
-    manifest_file = "manifest.json"
-    _sapper_server_rollup_config(
-        name = "_" + name + ".rollup.config.js",
-        deps = [
-            client,
-        ],
-        client_entry_point = client_entry_point,
-        client_bundler_config = client_bundler_config,
-        manifest_path = manifest_file,
-        package_alias = "@sapper",
-        routes_alias = "@/src/routes",
-        static_dir = ":" + "_" + name + ".static",
-        typing = server,
+    if not client_srcs:
+        client_srcs = []
+
+
+
+
+
+    copy_typing(
+        name = "%s.out-decls" % name,
+        src = server,
         typing_amd_module_name = package_name,
-
-        routes_src_dir = ":" + "_" + name + ".routes",
-        template_path = client_template,
     )
 
-    native.filegroup(
-        name = "_" + name + ".declarations",
-        srcs = [
-            server,
-        ],
-    )
+    for format in ["cjs", "esm"]:
+        name_format = "%s.%s" % (name, format)
 
-    rollup_bundle(
-        name = name + ".bundle",
-        srcs = [
-            ":" + "_" + name + ".static",
-            ":" + "_" + name + ".routes",
-            ":" + "_" + name + ".declarations",
-            client_entry_point,
-            client_bundler_config,
-            client_template,
-        ],
-        deps = [
-            client,
-            server,
-            ":" + "_" + name + ".sapper-routes",
-            "//tools/sapper:sapper_pkg",
-        ] + bundler_deps + deps + srcs,
-        typings = True,
-        config_file = "_" + name + ".rollup.config.js",
-        format = "cjs",
-        extra_outputs = [manifest_file],
-        asset_file_names = "assets/[name][extname]",
-        entry_points = {
-            server_entry_point: "index",
-        },
-    )
+        native.filegroup(
+            name = "_" + name_format + ".declarations",
+            srcs = [
+                server,
+            ],
+        )
 
-    _just_files(
-        name = name + ".bundle-files",
-        files = [
-            ":" + name + ".bundle",
-        ]
-    )
+        manifest_file = "%s-manifest.json" % name_format
+        _sapper_server_rollup_config(
+            name = "_" + name_format + ".rollup.config.js",
+            deps = [
+                client,
+            ],
+            client_entry_point = client_entry_point,
+            client_bundler_config = client_bundler_config,
+            manifest_path = manifest_file,
+            package_alias = "@sapper",
+            routes_alias = "@/src/routes",
+            static_dir = ":" + "_" + name + ".static",
 
-    js_library(
-        name = name,
-        srcs = [
-            ":" + name + ".bundle-files",
-        ],
-        # package_path_prefix = name + ".bundle",
-        # module_name = "metered/" + native.package_name(),
-        # package_name = "metered/" + native.package_name() + "/" + name,
-        package_name = package_name,
-        deps = deps + [ 
-            # TODO We want all the npm dependencies of srcs... 
-            server, # We want to use all the dependencies of server...
-        ],
-    )
+            routes_src_dir = ":" + "_" + name + ".routes",
+            template_path = client_template,
+        )
+
+        rollup_bundle(
+            name = name_format + ".bundle",
+            srcs = [
+                ":" + "_" + name + ".static",
+                ":" + "_" + name + ".routes",
+                ":" + "_" + name_format + ".declarations",
+                client_entry_point,
+                client_bundler_config,
+                client_template,
+            ] + client_srcs,
+            deps = [
+                client,
+                server,
+                ":" + "_" + name + ".sapper-routes",
+                "//tools/sapper:sapper_pkg",
+            ] + bundler_deps + deps + srcs,
+            config_file = "_" + name_format + ".rollup.config.js",
+            format = format,
+            extra_outputs = [manifest_file],
+            asset_file_names = "assets/[name][extname]",
+            entry_points = {
+                server_entry_point: "index",
+            },
+        )
+
+        _just_files(
+            name = name_format + ".bundle-files",
+            files = [
+                ":" + name_format + ".bundle",
+            ]
+        )
+
+        js_library(
+            name = name_format,
+            srcs = [
+                ":" + name_format + ".bundle-files",
+                ":" + "%s.out-decls" % name,
+            ],
+            package_name = package_name,
+            deps = deps + [ 
+                # TODO We want all the npm dependencies of srcs... 
+                server, # We want to use all the dependencies of server...
+            ],
+        )

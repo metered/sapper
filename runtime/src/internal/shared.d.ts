@@ -43,16 +43,16 @@ export type ContextInitInput<Stores> = {
 
 export type ContextInit<Stores> = (input: ContextInitInput<Stores>) => void
 
-export type Preloader<Fetch> = <Props>(
+export type Preloader<Fetch, Props> = (
   ctx: PreloadContext<Fetch>,
   preload: Preload<Fetch, Props>,
   page: Page,
   session: Session,
 ) => (Props | Promise <Props>)
 
-export type BaseContext<Fetch> = {
+export type BaseContext<Fetch, Props> = {
   fetch: Fetch;
-  preload: Preloader<Fetch>
+  preload: Preloader<Fetch, Props>
   layout?: ContextInit<Stores<Fetch>>
 }
 

@@ -21,11 +21,13 @@ load(
     "DeclarationInfo",
     "JSModuleInfo",
     "JSNamedModuleInfo",
+    "JSEcmaScriptModuleInfo",
     "LinkablePackageInfo",
     "NpmPackageInfo",
     "declaration_info",
     "js_module_info",
     "js_named_module_info",
+    "js_ecma_script_module_info",
 )
 load(
   ":internal/copy_file.bzl",
@@ -65,6 +67,7 @@ def _impl(ctx):
     all_files = []
     typings = []
     js_files = []
+    mjs_files = []
     named_module_files = []
     include_npm_package_info = False
 
@@ -83,8 +86,11 @@ def _impl(ctx):
             file = dst
 
         # register js files
-        if file.basename.endswith(".js") or file.basename.endswith(".js.map") or file.basename.endswith(".json"):
+        if file.basename.endswith(".js") or file.basename.endswith(".js.map") or file.basename.endswith(".json") or file.is_directory:
             js_files.append(file)
+        
+        if file.basename.endswith(".mjs") or file.basename.endswith(".mjs.map") or file.basename.endswith(".json") or file.is_directory:
+            mjs_files.append(file)
 
         # register typings
         if (
@@ -123,6 +129,7 @@ def _impl(ctx):
 
     files_depset = depset(all_files)
     js_files_depset = depset(js_files)
+    mjs_files_depset = depset(mjs_files)
     named_module_files_depset = depset(named_module_files)
     typings_depset = depset(typings)
 
@@ -132,6 +139,7 @@ def _impl(ctx):
     direct_named_module_sources_depsets = [named_module_files_depset]
     typings_depsets = [typings_depset]
     js_files_depsets = [js_files_depset]
+    mjs_files_depsets = [mjs_files_depset]
 
     for dep in ctx.attr.deps:
         if NpmPackageInfo in dep:
@@ -140,6 +148,9 @@ def _impl(ctx):
             if JSModuleInfo in dep:
                 js_files_depsets.append(dep[JSModuleInfo].direct_sources)
                 direct_sources_depsets.append(dep[JSModuleInfo].direct_sources)
+            if JSEcmaScriptModuleInfo in dep:
+                mjs_files_depsets.append(dep[JSEcmaScriptModuleInfo].direct_sources)
+                direct_sources_depsets.append(dep[JSEcmaScriptModuleInfo].direct_sources)
             if JSNamedModuleInfo in dep:
                 direct_named_module_sources_depsets.append(dep[JSNamedModuleInfo].direct_sources)
                 direct_sources_depsets.append(dep[JSNamedModuleInfo].direct_sources)
@@ -162,6 +173,10 @@ def _impl(ctx):
             sources = depset(transitive = js_files_depsets),
             deps = ctx.attr.deps,
         ),
+        js_ecma_script_module_info(
+            sources = depset(transitive = mjs_files_depsets),
+            deps = ctx.attr.deps,
+        ),
         js_named_module_info(
             sources = depset(transitive = direct_named_module_sources_depsets),
             deps = ctx.attr.deps,
@@ -173,7 +188,7 @@ def _impl(ctx):
         providers.append(LinkablePackageInfo(
             package_name = ctx.attr.package_name,
             path = path,
-            files = depset(transitive = direct_sources_depsets),
+            files = depset(all_files, transitive = direct_sources_depsets),
         ))
 
     if include_npm_package_info:
@@ -186,11 +201,13 @@ def _impl(ctx):
 
     # Don't provide DeclarationInfo if there are no typings to provide.
     # Improves error messaging downstream if DeclarationInfo is required.
-    if len(typings):
+    if len(typings) or len(typings_depsets) > 1:
+        decls = depset(transitive = typings_depsets)
         providers.append(declaration_info(
-            declarations = depset(transitive = typings_depsets),
+            declarations = decls,
             deps = ctx.attr.deps,
         ))
+        providers.append(OutputGroupInfo(types = decls))
 
     return providers
 

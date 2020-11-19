@@ -1,6 +1,6 @@
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@build_bazel_rules_nodejs//:index.bzl", "nodejs_binary")
-load("//tools/internal/typescript:index.bzl", "ts_library")
+load("@npm//@bazel/typescript:index.bzl", "ts_library")
 
 load("@build_bazel_rules_svelte//:providers.bzl", "SvelteComponentInfo")
 load("@build_bazel_rules_nodejs//:providers.bzl", "JSEcmaScriptModuleInfo", "JSModuleInfo", "JSNamedModuleInfo", "NodeContextInfo", "NpmPackageInfo", "DeclarationInfo", "node_modules_aspect", "run_node", "js_ecma_script_module_info")
@@ -163,11 +163,15 @@ def _forest_layout_impl(ctx):
                 ))
             layout[prefixes.get(tree, "") + mapped_to] = target_files[0]
 
+    fli = forest_layout_info(
+        layouts = layouts,
+        deps = ctx.attr.deps + ctx.attr.mapped_srcs.keys() + ctx.attr.srcs,
+    )
     return [
-        forest_layout_info(
-            layouts = layouts,
-            deps = ctx.attr.deps + ctx.attr.mapped_srcs.keys() + ctx.attr.srcs,
+        DefaultInfo(
+            files = fli.sources,
         ),
+        fli,
     ]
     
 forest_layout = rule(

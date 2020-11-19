@@ -11,7 +11,6 @@ export function get_assets_handler<Rq extends Req, Rs extends Res>() {
   return sirv<Rq, Rs>(assets_manifest.directory, {
     dev,
     setHeaders: (res: Rs, pathname: string, stats: fs.Stats) => {
-      console.log({ pathname })
       for (const { key, value } of entries[pathname.substring(1)]?.headers || []) {
         res.setHeader(key, value)
       }

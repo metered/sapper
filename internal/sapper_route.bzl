@@ -1,4 +1,4 @@
-load("//tools/internal/typescript:index.bzl", "ts_library")
+load("@npm//@bazel/typescript:index.bzl", "ts_library")
 
 load(":internal/forest_layout.bzl", "forest_layout")
 
@@ -44,7 +44,7 @@ def sapper_route(
         ts_library(
             name = name + "__ts",
             srcs = ts_sources,
-            deps = server_deps + deps,
+            deps = server_deps,
             generate_externs = False,
         )
 

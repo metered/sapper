@@ -54,6 +54,16 @@ export type Target = {
   page: Page;
 };
 
+export type NavigateHook = (
+  fn: () => Promise<void>,
+  options: {
+    target: Target;
+    id: number | null;
+    noscroll?: boolean;
+    hash?: string;
+  }
+) => Promise<void>
+
 export interface History {
   pushState(state: unknown, title: string, href: string): void;
   replaceState(state: unknown, title: string, href: string): void;

@@ -17,7 +17,7 @@ export interface ChunkMeta {
 }
 
 export interface Chunk extends ChunkMeta {
-  readonly deps: Iterable<this>;
+  readonly deps: this[];
   readonly dynamic_deps: Iterable<this>;
   readonly manifest: ReadonlySet<string>;
 }
@@ -89,7 +89,12 @@ export class ChunkResolver<S> {
 
   private async define_chunk(id: string, internals: Internals) {
     if (this.chunk_cache.has(id)) {
-      throw new Error(`Name collision: already have a chunk with id: ${id}`)
+      console.warn(`Name collision: already have a chunk with id: ${id}`)
+      const chunk = this.chunk_cache.get(id)
+      if (chunk) {
+        return chunk
+      }
+      // throw new Error(`Name collision: already have a chunk with id: ${id}`)
     }
 
     const chunk = {

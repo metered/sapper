@@ -1,5 +1,5 @@
 load("@npm//@bazel/rollup:index.bzl", "rollup_bundle")
-load("//tools/internal/typescript:index.bzl", "ts_library")
+load("@npm//@bazel/typescript:index.bzl", "ts_library")
 load("@build_bazel_rules_nodejs//:index.bzl", "nodejs_binary", "pkg_npm")
 
 ts_library(
@@ -246,7 +246,15 @@ ts_library(
 exports_files([
   "src/cli.ts",
   "internal/rollup.config.js",
+  "internal/package.json",
 ])
+
+nodejs_binary(
+  name = "internal/copy_typing_bin",
+  entry_point = "internal/copy_typing.js",
+  visibility = ["//visibility:public"],
+)
+
 
 ts_library(
   name = "config",

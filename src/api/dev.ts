@@ -1,17 +1,18 @@
 import * as path from 'path';
-import * as fs from 'fs';
 import * as http from 'http';
 import * as child_process from 'child_process';
 import * as ports from 'port-authority';
 import { EventEmitter } from 'events';
-import { create_manifest_data, create_app, create_compilers, create_serviceworker_manifest } from '../core';
-import { Compilers, Compiler, CompileResult } from '../core/create_compilers/interfaces';
+import {
+	read_template,
+} from 'sapper/core';
 import Deferred from './utils/Deferred';
 import validate_bundler from './utils/validate_bundler';
 import { copy_shimport } from './utils/copy_shimport';
-import { ManifestData, FatalEvent, ErrorEvent, ReadyEvent, InvalidEvent } from '../interfaces';
-import read_template from '../core/read_template';
-import { noop } from './utils/noop';
+import {
+	FatalEvent,
+	InvalidEvent
+} from '../interfaces';
 import { copy_runtime } from './utils/copy_runtime';
 import { rimraf, mkdirp } from './utils/fs_utils';
 
@@ -145,7 +146,10 @@ class Watcher extends EventEmitter {
 			this.port = await ports.find(3000);
 		}
 
-		const { cwd, src, dest, routes, output, static: static_files } = this.dirs;
+		const {
+			dest,
+			output,
+		} = this.dirs;
 
 		rimraf(output);
 		mkdirp(output);
@@ -161,219 +165,6 @@ class Watcher extends EventEmitter {
 		if (!this.devtools_port) this.devtools_port = await ports.find(9222);
 
 		// TODO watch the configs themselves?
-		const compilers: Compilers = await create_compilers(this.bundler, cwd, src, dest, true);
-
-		let manifest_data: ManifestData;
-
-		try {
-			manifest_data = create_manifest_data(routes, this.ext);
-			create_app({
-				bundler: this.bundler,
-				manifest_data,
-				has_service_worker: !!compilers.serviceworker,
-				dev: true,
-				dev_port: this.dev_port,
-				cwd, src, routes, output
-			});
-		} catch (err) {
-			this.emit('fatal', <FatalEvent>{
-				message: err.message
-			});
-			return;
-		}
-
-		this.dev_server = new DevServer(this.dev_port);
-
-		this.filewatchers.push(
-			watch_dir(
-				routes,
-				({ path: file, stats }) => {
-					if (stats.isDirectory()) {
-						return path.basename(file)[0] !== '_';
-					}
-					return true;
-				},
-				() => {
-					try {
-						manifest_data = create_manifest_data(routes, this.ext);
-						create_app({
-							bundler: this.bundler,
-							manifest_data,
-							dev: true,
-							dev_port: this.dev_port,
-							has_service_worker: !!compilers.serviceworker,
-							cwd, src, routes, output
-						});
-					} catch (error) {
-						this.emit('error', <ErrorEvent>{
-							type: 'manifest',
-							error
-						});
-					}
-				}
-			)
-		);
-
-		if (this.live) {
-			this.filewatchers.push(
-				fs.watch(`${src}/template.html`, () => {
-					this.dev_server.send({
-						action: 'reload'
-					});
-				})
-			);
-		}
-
-		let deferred = new Deferred();
-
-		const emitFatal = () => {
-			this.emit('fatal', <FatalEvent>{
-				message: `Server crashed`
-			});
-
-			this.crashed = true;
-			this.proc = null;
-		};
-
-		this.watch(compilers.server, {
-			name: 'server',
-
-			invalid: filename => {
-				this.restart(filename, 'server');
-			},
-
-			handle_result: (result: CompileResult) => {
-				deferred.promise.then(() => {
-					const restart = () => {
-						this.crashed = false;
-
-						return ports.wait(this.port)
-							.then((() => {
-								this.emit('ready', <ReadyEvent>{
-									port: this.port,
-									process: this.proc
-								});
-
-								if (this.hot && this.bundler === 'webpack' && this.dev_server) {
-									this.dev_server.send({
-										status: 'completed'
-									});
-								} else if (this.live && this.dev_server) {
-									this.dev_server.send({
-										action: 'reload'
-									});
-								}
-							}))
-							.catch(err => {
-								if (this.crashed) return;
-
-								this.emit('fatal', <FatalEvent>{
-									message: `Server is not listening on port ${this.port}`
-								});
-							});
-					};
-
-					const start_server = () => {
-						// we need to give the child process its own DevTools port,
-						// otherwise Node will try to use the parent's (and fail)
-						const debugArgRegex = /--inspect(?:-brk|-port)?|--debug-port/;
-						const execArgv = process.execArgv.slice();
-						if (execArgv.some((arg: string) => !!arg.match(debugArgRegex))) {
-							execArgv.push(`--inspect-port=${this.devtools_port}`);
-						}
-
-						this.proc = child_process.fork(`${dest}/server/server.js`, [], {
-							cwd: process.cwd(),
-							env: Object.assign({
-								PORT: this.port
-							}, process.env),
-							stdio: ['ipc'],
-							execArgv
-						});
-
-						this.proc.stdout.on('data', chunk => {
-							this.emit('stdout', chunk);
-						});
-
-						this.proc.stderr.on('data', chunk => {
-							this.emit('stderr', chunk);
-						});
-
-						this.proc.on('message', message => {
-							if (message.__sapper__ && message.event === 'basepath') {
-								this.emit('basepath', {
-									basepath: message.basepath
-								});
-							}
-						});
-
-						this.proc.on('exit', emitFatal);
-					};
-
-					if (this.proc) {
-						if (this.restarting) return;
-						this.restarting = true;
-						this.proc.removeListener('exit', emitFatal);
-						this.proc.kill();
-						this.proc.on('exit', async () => {
-							start_server();
-							await restart();
-							this.restarting = false;
-						});
-					} else {
-						start_server();
-						restart();
-					}
-				});
-			}
-		});
-
-		this.watch(compilers.client, {
-			name: 'client',
-
-			invalid: filename => {
-				this.restart(filename, 'client');
-				deferred = new Deferred();
-
-				// TODO we should delete old assets. due to a webpack bug
-				// i don't even begin to comprehend, this is apparently
-				// quite difficult
-			},
-
-			handle_result: (result: CompileResult) => {
-				fs.writeFileSync(
-					path.join(dest, 'build.json'),
-
-					// TODO should be more explicit that to_json has effects
-					JSON.stringify(result.to_json(manifest_data, this.dirs), null, '  ')
-				);
-
-				const client_files = result.chunks.map(chunk => `client/${chunk.file}`);
-
-				create_serviceworker_manifest({
-					manifest_data,
-					output,
-					client_files,
-					static_files
-				});
-
-				deferred.fulfil();
-
-				// we need to wait a beat before watching the service
-				// worker, because of some webpack nonsense
-				setTimeout(watch_serviceworker, 100);
-			}
-		});
-
-		let watch_serviceworker = compilers.serviceworker
-			? () => {
-				watch_serviceworker = noop;
-
-				this.watch(compilers.serviceworker, {
-					name: 'service worker'
-				});
-			}
-			: noop;
 	}
 
 	close() {
@@ -417,32 +208,6 @@ class Watcher extends EventEmitter {
 		}
 	}
 
-	watch(compiler: Compiler, { name, invalid = noop, handle_result = noop }: {
-		name: string,
-		invalid?: (filename: string) => void;
-		handle_result?: (result: CompileResult) => void;
-	}) {
-		compiler.oninvalid(invalid);
-
-		compiler.watch((error?: Error, result?: CompileResult) => {
-			if (error) {
-				this.emit('error', <ErrorEvent>{
-					type: name,
-					error
-				});
-			} else {
-				this.emit('build', {
-					type: name,
-
-					duration: result.duration,
-					errors: result.errors,
-					warnings: result.warnings
-				});
-
-				handle_result(result);
-			}
-		});
-	}
 }
 
 const INTERVAL = 10000;
@@ -497,30 +262,9 @@ class DevServer {
 	}
 }
 
-function watch_dir(
-	dir: string,
-	filter: ({ path, stats }: { path: string, stats: fs.Stats }) => boolean,
-	callback: () => void
-) {
-	let watch: any;
-	let closed = false;
 
-	import('cheap-watch').then(({ default: CheapWatch }) => {
-		if (closed) return;
 
-		watch = new CheapWatch({ dir, filter, debounce: 50 });
 
-		watch.on('+', callback);
 
-		watch.on('-', callback);
 
-		watch.init();
-	});
 
-	return {
-		close: () => {
-			if (watch) watch.close();
-			closed = true;
-		}
-	};
-}

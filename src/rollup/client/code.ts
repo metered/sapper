@@ -98,7 +98,7 @@ export async function chunk_content_from_modules(
   throw new Error("Internal error: no content available for chunk")
 }
 
-export function emit_code_and_sourcemap({
+export async function emit_code_and_sourcemap({
   sourcemap,
   sourcemap_url_prefix,
   output_file_name,
@@ -109,8 +109,8 @@ export function emit_code_and_sourcemap({
   sourcemap_url_prefix: string;
   output_file_name: string;
   output: { map: SourceMap, code: string };
-  emit: (name: string, content: string) => string
-}): string {
+  emit: (name: string, content: string) => string | Promise<string>
+}): Promise<string> {
   map = Object.assign({}, map, { file: output_file_name });
 
   if (sourcemap === true) {
@@ -123,5 +123,5 @@ export function emit_code_and_sourcemap({
     code += `\n/*# sourceMappingURL=${inline_sourcemap_header}${base64} */`;
   }
 
-  return emit(output_file_name, code)
+  return await emit(output_file_name, code)
 }

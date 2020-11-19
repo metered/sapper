@@ -36,6 +36,7 @@ import {
 	Preload,
 	Fetch,
 	History,
+	NavigateHook,
 } from '@sapper/internal/manifest-client';
 
 import goto from './goto';
@@ -132,15 +133,18 @@ let _history: History = typeof history !== 'undefined' ? history : {
 };
 export { _history as history };
 
-let preloader: Preloader<typeof fetch>
+let navigateHook: NavigateHook = fn => fn()
+
+let preloader: Preloader<typeof fetch, unknown>
 let inital_contexts_setter: ContextInit<Stores<Fetch>> | undefined
 
 export function set_base_context(c: AppContext) {
 	_fetch = c.fetch
 	preloader = c.preload
 	inital_contexts_setter = c.layout
-	_history = c.history
+	// _history = c.history
 	stores.fetch.set(c.fetch)
+	navigateHook = c.aroundNavigate
 }
 export const scroll_history: Record<string, ScrollPosition> = {};
 
@@ -218,6 +222,10 @@ export function scroll_state() {
 }
 
 export async function navigate(target: Target, id: number | null, noscroll?: boolean, hash?: string): Promise<void> {
+	return navigateHook(navigate0.bind(null, target, id, noscroll, hash), {target, id, noscroll, hash})
+}
+
+async function navigate0(target: Target, id: number | null, noscroll?: boolean, hash?: string): Promise<void> {
 	if (id) {
 		// popstate or initial navigation
 		cid = id;
@@ -241,6 +249,7 @@ export async function navigate(target: Target, id: number | null, noscroll?: boo
 
 	prefetching = null;
 
+	
 	const token = current_token = {};
 	const loaded_result = await loaded
 	const { redirect } = loaded_result;
@@ -250,6 +259,9 @@ export async function navigate(target: Target, id: number | null, noscroll?: boo
 	} else {
 		const { props, branch, preload_error } = loaded_result
 		if (preload_error) {
+			if (preload_error.error.message.includes("Failed to fetch dynamically imported module")) {
+				window.location.reload()
+			}
 			await handle_error(new URL(target.href), preload_error.statusCode, preload_error.error)
 		} else {
 			await render(branch, props, target.page);
